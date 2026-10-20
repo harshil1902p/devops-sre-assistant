@@ -1,0 +1,11 @@
+# Secret scanning config (used locally and in CI). Extends gitleaks' default rules.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Placeholders and template variables, never real values"
+regexes = [
+  '''<VECTORDB_PASSWORD from infra/\.env>''',
+  '''\$\{[A-Z_]+(:\?[^}]*)?\}''',
+  '''<random>''',
+]
