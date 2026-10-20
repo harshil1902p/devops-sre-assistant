@@ -9,3 +9,10 @@ dist/
 .DS_Store
 .deepeval/
 .audit/
+# Local credentials: never committed (see scripts/bootstrap_local_secrets.py)
+demo/.env
+infra/.env
+demo/auth-service/config/app.yaml
+*.pem
+*.key
+.azure/

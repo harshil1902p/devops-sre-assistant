@@ -105,7 +105,7 @@ Tools are **an API whose consumer is a language model**. Good design rules we ap
 | **Audit trail** | JSONL per call: redacted args, ok/error, output tokens, duration | accountability and forensics (regulated environments) |
 
 Lesson from debugging: our terminal **masked** the redacted URL (`******`), which looked like a redaction bug. The fix was to
-**assert** on exact output (`'REMOVED-DEMO-DB-PASSWORD' not in out`) rather than trust what's displayed.
+**assert** on exact output (`demo_password not in out`) rather than trust what's displayed.
 
 ---
 

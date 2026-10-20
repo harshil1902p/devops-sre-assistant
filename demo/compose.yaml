@@ -1,4 +1,5 @@
 # Demo "staging" environment the SRE assistant will monitor and diagnose.
+# Credentials come from demo/.env (gitignored; created by scripts/bootstrap_local_secrets.py).
 #   docker compose -f demo/compose.yaml up -d --build
 # Labels `sre.service` / `sre.environment` are how the MCP server (Phase 3) discovers containers,
 # just like Kubernetes label selectors.
@@ -15,7 +16,7 @@ services:
     environment:
       SERVICE_NAME: auth-service
       ENVIRONMENT: staging
-      DATABASE_URL: postgresql+psycopg://auth:REMOVED-DEMO-DB-PASSWORD@auth-db:5432/auth
+      DATABASE_URL: postgresql+psycopg://auth:${AUTH_DB_PASSWORD:?missing - run scripts/bootstrap_local_secrets.py}@auth-db:5432/auth
       REDIS_URL: redis://auth-cache:6379/0
       DB_POOL_SIZE: "5"
       DB_MAX_OVERFLOW: "2"
@@ -47,7 +48,7 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: auth
-      POSTGRES_PASSWORD: REMOVED-DEMO-DB-PASSWORD
+      POSTGRES_PASSWORD: ${AUTH_DB_PASSWORD:?missing - run scripts/bootstrap_local_secrets.py}
       POSTGRES_DB: auth
     labels:
       <<: *sre-env

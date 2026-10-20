@@ -15,6 +15,11 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="SRE_", env_file=".env", extra="ignore")
 
     llm_provider: Literal["ollama", "azure_openai"] = "ollama"
+    # Optional per-capability overrides. Embeddings must match the index (see SRE_EMBEDDING_DIM), so it is
+    # common to move chat to a hosted model while keeping the existing embedding model.
+    chat_provider: Literal["ollama", "azure_openai"] | None = None
+    embedding_provider: Literal["ollama", "azure_openai"] | None = None
+    num_ctx: int = Field(16384, ge=2048, description="Ollama context window (its default silently truncates)")
     chat_model: str = "qwen2.5:7b"
     embedding_model: str = "nomic-embed-text"
     embedding_dim: int = Field(768, gt=0)
@@ -26,7 +31,9 @@ class Settings(BaseSettings):
     azure_openai_api_version: str = "2024-10-21"
     azure_openai_api_key: SecretStr | None = None
 
-    database_url: SecretStr = SecretStr("postgresql://sre:REMOVED-VECTORDB-PASSWORD@localhost:5433/sre")
+    database_url: SecretStr = SecretStr(
+        "postgresql://sre@localhost:5433/sre"
+    )  # password comes from SRE_DATABASE_URL in .env
 
     # --- RAG ---
     child_max_tokens: int = Field(128, ge=32, description="max tokens of a matched child chunk")
@@ -47,10 +54,19 @@ class Settings(BaseSettings):
     mcp_log_max_tokens: int = Field(2500, ge=300, description="token budget for inspect_live_logs output")
     mcp_audit_log: str | None = ".audit/mcp_audit.jsonl"
 
+    @property
+    def effective_chat_provider(self) -> str:
+        return self.chat_provider or self.llm_provider
+
+    @property
+    def effective_embedding_provider(self) -> str:
+        return self.embedding_provider or self.llm_provider
+
     @model_validator(mode="after")
     def _check_azure(self) -> "Settings":
-        if self.llm_provider == "azure_openai" and not self.azure_openai_endpoint:
-            raise ValueError("SRE_AZURE_OPENAI_ENDPOINT is required when SRE_LLM_PROVIDER=azure_openai")
+        uses_azure = "azure_openai" in (self.effective_chat_provider, self.effective_embedding_provider)
+        if uses_azure and not self.azure_openai_endpoint:
+            raise ValueError("SRE_AZURE_OPENAI_ENDPOINT is required when a provider is azure_openai")
         return self
 
 

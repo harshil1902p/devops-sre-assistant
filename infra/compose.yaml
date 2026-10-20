@@ -1,3 +1,4 @@
+# Credentials come from infra/.env (gitignored; created by scripts/bootstrap_local_secrets.py).
 # The assistant's own infrastructure (separate from the demo "staging" stack it monitors).
 #   docker compose -f infra/compose.yaml up -d
 name: sre-assistant
@@ -7,7 +8,7 @@ services:
     image: pgvector/pgvector:0.8.0-pg16
     environment:
       POSTGRES_USER: sre
-      POSTGRES_PASSWORD: REMOVED-VECTORDB-PASSWORD
+      POSTGRES_PASSWORD: ${VECTORDB_PASSWORD:?missing - run scripts/bootstrap_local_secrets.py}
       POSTGRES_DB: sre
     ports:
       - "5433:5432"
@@ -34,7 +35,7 @@ services:
     build: ./event-collector
     environment:
       DOCKER_HOST: tcp://docker-proxy:2375
-      EVENTS_DATABASE_URL: postgresql://sre:REMOVED-VECTORDB-PASSWORD@vectordb:5432/sre
+      EVENTS_DATABASE_URL: postgresql://sre:${VECTORDB_PASSWORD:?missing - run scripts/bootstrap_local_secrets.py}@vectordb:5432/sre
     depends_on:
       vectordb:
         condition: service_healthy

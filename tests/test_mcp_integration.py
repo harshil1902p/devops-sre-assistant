@@ -14,6 +14,11 @@ pytestmark = [pytest.mark.integration, pytest.mark.anyio]
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _local_env(path: Path) -> dict[str, str]:
+    """Read the gitignored local credentials file (created by scripts/bootstrap_local_secrets.py)."""
+    return dict(line.split("=", 1) for line in path.read_text().splitlines() if "=" in line)
+
+
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
@@ -35,7 +40,8 @@ async def test_stdio_end_to_end(params):
     assert {"auth-service", "auth-db", "auth-cache"} <= {s["service"] for s in services}
     assert health["status"] == "running" and any("8080" in p for p in health["ports"])
     assert not logs.is_error
-    assert "REMOVED-DEMO-DB-PASSWORD" not in cfg.structured_content["content"]
+    demo_password = _local_env(ROOT / "demo" / ".env")["AUTH_DB_PASSWORD"]
+    assert demo_password not in cfg.structured_content["content"]
     assert hits.structured_content["results"][0]["doc_id"] in {"RB-AUTH-DB-POOL", "PM-INC-2025-0142", "KB-0004"}
 
 
