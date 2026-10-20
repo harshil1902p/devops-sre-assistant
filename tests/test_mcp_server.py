@@ -166,7 +166,7 @@ async def test_search_redacts_query_and_falls_back_when_service_has_no_docs(serv
         r = await c.call_tool(
             "search_runbooks", {"query": f"timeout on redis://u:{FAKE_PW}@cache", "service": "auth-cache"}
         )
-    assert r.structured_content["results"][0]["citation"] == "RB-AUTH-REDIS-TIMEOUT § Root Cause"
+    assert r.structured_content["results"][0]["citation"] == "[RB-AUTH-REDIS-TIMEOUT] Root Cause"
     assert all(FAKE_PW not in q for q, _ in retriever.calls)
     assert [f for _, f in retriever.calls] == [{"service": "auth-cache"}, None]
 

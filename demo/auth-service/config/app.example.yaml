@@ -2,6 +2,7 @@
 # TEMPLATE: scripts/bootstrap_local_secrets.py renders this into app.yaml (gitignored) with
 # locally generated credentials. NOTE: they are demo-only credentials. They exist so Phase 3/5 can prove the
 # assistant reads config *safely* (secrets redacted before anything reaches an LLM).
+# Precedence: environment variables (DB_POOL_SIZE, DB_MAX_OVERFLOW, ...) override these file values.
 service:
   name: auth-service
   port: 8080

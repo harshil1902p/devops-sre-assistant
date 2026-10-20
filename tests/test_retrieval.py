@@ -73,7 +73,7 @@ def test_hybrid_fuses_and_returns_parents():
     assert not res.reranked
     top = res.sections[0]
     assert (top.vector_rank, top.keyword_rank) == (2, 1)
-    assert top.citation == "d2 § Root Cause"
+    assert top.citation == "[d2] Root Cause"
 
 
 def test_reranker_reorders_candidates():

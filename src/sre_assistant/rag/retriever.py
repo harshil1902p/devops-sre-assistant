@@ -40,7 +40,8 @@ class RetrievedSection:
 
     @property
     def citation(self) -> str:
-        return f"{self.doc_id} § {self.section}"
+        # ASCII only: the LLM must copy this verbatim (a non-ASCII "§" came back corrupted as "\x00a7").
+        return f"[{self.doc_id}] {self.section}"
 
 
 @dataclass

@@ -16,6 +16,7 @@ search, structured output, citation verification.
 import asyncio
 import json
 import operator
+import re
 import time
 import uuid
 from typing import Annotated, Any, TypedDict
@@ -30,7 +31,7 @@ from pydantic import BaseModel, Field
 from sre_assistant.agent.context import compact, is_user_message, note
 from sre_assistant.agent.diagnosis import Diagnosis, check_grounding, render_markdown
 from sre_assistant.agent.prompts import FINAL_INSTRUCTION, FOLLOWUP_HINT, SYSTEM_PROMPT
-from sre_assistant.agent.timeline import build_timeline
+from sre_assistant.agent.timeline import build_timeline, uncovered_windows
 
 TRIAGE_TOOLS = ("check_system_health", "inspect_live_logs", "get_recent_events")
 
@@ -49,6 +50,8 @@ class AgentState(TypedDict, total=False):
     reminded: bool
     retrieved_doc_ids: Annotated[list[str], _union]
     timeline: list[str]
+    windows: list[dict]
+    search_queries: list[str]
     diagnosis: dict | None
     grounding: dict | None
     llm_calls: Annotated[list[dict], operator.add]
@@ -112,7 +115,9 @@ def build_graph(model: BaseChatModel, tools: list[BaseTool], checkpointer=None, 
         ids = [f"triage_{uuid.uuid4().hex[:10]}" for _ in calls]
         results = await asyncio.gather(*(run_tool(n, a, i) for (n, a), i in zip(calls, ids, strict=True)))
         art = {n: r.artifact for (n, _), r in zip(calls, results, strict=True)}
-        timeline = build_timeline(art["check_system_health"], art["inspect_live_logs"], art["get_recent_events"])
+        timeline, windows = build_timeline(
+            art["check_system_health"], art["inspect_live_logs"], art["get_recent_events"]
+        )
         # Prefetched results are injected as if the model had called the tools itself, so the conversation
         # stays a valid tool-calling transcript for any provider.
         ai = AIMessage(
@@ -122,6 +127,8 @@ def build_graph(model: BaseChatModel, tools: list[BaseTool], checkpointer=None, 
         return {
             "messages": [ai, *results, note(header + "\n".join(timeline))],
             "timeline": timeline,
+            "windows": windows,
+            "search_queries": [],
             "tools_used": list(TRIAGE_TOOLS),
         }  # fmt: skip
 
@@ -139,7 +146,7 @@ def build_graph(model: BaseChatModel, tools: list[BaseTool], checkpointer=None, 
             (tc["name"], json.dumps(tc["args"], sort_keys=True))
             for m in state["messages"][:-1] if isinstance(m, AIMessage) for tc in m.tool_calls
         }  # fmt: skip
-        out, retrieved = [], []
+        out, retrieved, queries = [], [], list(state.get("search_queries", []))
         for tc in last.tool_calls:
             key = (tc["name"], json.dumps(tc["args"], sort_keys=True))
             if n >= max_tool_calls:
@@ -153,15 +160,28 @@ def build_graph(model: BaseChatModel, tools: list[BaseTool], checkpointer=None, 
             seen.add(key)
             msg = await run_tool(tc["name"], tc["args"], tc["id"])
             n, used = n + 1, [*used, tc["name"]]
-            if tc["name"] == "search_runbooks" and isinstance(msg.artifact, dict):
-                retrieved += [r["doc_id"] for r in msg.artifact.get("results", [])]
+            if tc["name"] == "search_runbooks":
+                queries.append(str(tc["args"].get("query", "")))
+                if isinstance(msg.artifact, dict):
+                    retrieved += [r["doc_id"] for r in msg.artifact.get("results", [])]
             out.append(msg)
-        return {"messages": out, "tool_calls": n, "tools_used": used, "retrieved_doc_ids": retrieved}
+        return {"messages": out, "tool_calls": n, "tools_used": used, "retrieved_doc_ids": retrieved,
+                "search_queries": queries}  # fmt: skip
 
     async def remind(state: AgentState) -> dict:
-        return {"reminded": True, "messages": [note(
-            "Before answering you must call search_runbooks with the most relevant error signature or symptom "
-            "(institutional knowledge often contains the exact fix). Then reply READY.")]}  # fmt: skip
+        missing = uncovered_windows(state.get("windows", []), state.get("search_queries", []))
+        if "search_runbooks" not in state.get("tools_used", []):
+            text = ("Before answering you must call search_runbooks with the most relevant error signature or "
+                    "symptom (institutional knowledge often contains the exact fix).")  # fmt: skip
+        else:
+            text = "Not yet investigated: " + "; ".join(f"window #{w['index']} ({w['label']})" for w in missing)
+            text += ". Call search_runbooks for each of these signals before answering."
+        return {"reminded": True, "messages": [note(text + " Then reply READY.")]}
+
+    async def finish_followup(state: AgentState) -> dict:
+        last: AIMessage = state["messages"][-1]
+        text = re.sub(r"\s*\bREADY\s*$", "", str(last.content)).rstrip()  # defensive: strip a stray READY marker
+        return {"messages": [AIMessage(content=text, id=last.id)]}  # same id -> replaces the message in state
 
     async def respond(state: AgentState) -> dict:
         msgs = [SystemMessage(SYSTEM_PROMPT), *compact(state["messages"], max_context_tokens), note(FINAL_INSTRUCTION)]
@@ -193,9 +213,12 @@ def build_graph(model: BaseChatModel, tools: list[BaseTool], checkpointer=None, 
             return "tools"
         ready = str(last.content).strip().upper().startswith("READY")
         if state.get("followup") and not ready:
-            return END  # prose answer to a follow-up question
-        if "search_runbooks" not in state.get("tools_used", []) and not state.get("reminded"):
-            return "remind"
+            return "finish_followup"  # prose answer to a follow-up question
+        if not state.get("reminded") and (
+            "search_runbooks" not in state.get("tools_used", [])
+            or uncovered_windows(state.get("windows", []), state.get("search_queries", []))
+        ):
+            return "remind"  # coverage guard: every significant incident window must be investigated
         return "respond"
 
     def route_tools(state: AgentState) -> str:
@@ -203,13 +226,15 @@ def build_graph(model: BaseChatModel, tools: list[BaseTool], checkpointer=None, 
 
     g = StateGraph(AgentState)
     for name, fn in [("start_turn", start_turn), ("intake", intake), ("triage", triage), ("agent", agent),
-                     ("tools", tools_node), ("remind", remind), ("respond", respond)]:  # fmt: skip
+                     ("tools", tools_node), ("remind", remind), ("respond", respond),
+                     ("finish_followup", finish_followup)]:  # fmt: skip
         g.add_node(name, fn)
     g.add_edge(START, "start_turn")
     g.add_conditional_edges("start_turn", route_start, ["intake", "triage", "agent"])
     g.add_edge("intake", "triage")
     g.add_edge("triage", "agent")
-    g.add_conditional_edges("agent", route_agent, ["tools", "remind", "respond", END])
+    g.add_conditional_edges("agent", route_agent, ["tools", "remind", "respond", "finish_followup"])
+    g.add_edge("finish_followup", END)
     g.add_conditional_edges("tools", route_tools, ["agent", "respond"])
     g.add_edge("remind", "agent")
     g.add_edge("respond", END)

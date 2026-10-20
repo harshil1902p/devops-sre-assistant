@@ -25,7 +25,7 @@ An AI production companion that diagnoses crashes, server errors and infrastruct
 | 1 | Demo "auth-service" that really fails + synthetic runbook / post-mortem corpus | ✅ |
 | 2 | RAG: parent-child chunking, pgvector, hybrid search (vector + full-text, RRF) + cross-encoder rerank | ✅ |
 | 3 | MCP server (6 read-only tools, resource, prompt; stdio + streamable HTTP), event collector, socket proxy | ✅ |
-| 4 | LangGraph ReAct agent wired to MCP tools, cited answers, memory | 🚧 |
+| 4 | LangGraph agent (workflow + ReAct), Azure OpenAI keyless, memory, guards, grounding, spend cap | ✅ |
 | 5 | Guardrails: spaCy + regex redaction, prompt-injection defence, human-in-the-loop | ⏳ |
 | 6 | Evaluation: golden set, retrieval metrics, DeepEval LLM-as-a-Judge, CI gate | ⏳ |
 | 7 | Azure: Azure OpenAI, AI Search, Monitor/KQL, Key Vault, Managed Identity, Container Apps, Bicep | ⏳ |

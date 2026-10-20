@@ -12,6 +12,7 @@ from langchain_core.language_models import BaseChatModel
 
 from sre_assistant.config import Settings, get_settings
 from sre_assistant.llm.embeddings import PrefixedEmbeddings
+from sre_assistant.llm.spend import SpendGuard, SpendLedger
 
 COGNITIVE_SCOPE = "https://cognitiveservices.azure.com/.default"
 
@@ -32,7 +33,12 @@ def _azure_auth(s: Settings) -> dict:
     return {"azure_ad_token_provider": _entra_token_provider()}
 
 
-def get_chat_model(settings: Settings | None = None) -> BaseChatModel:
+def get_ledger(settings: Settings | None = None) -> SpendLedger:
+    s = settings or get_settings()
+    return SpendLedger(s.spend_ledger_path, s.spend_limit_usd)
+
+
+def get_chat_model(settings: Settings | None = None, tag: str = "") -> BaseChatModel:
     s = settings or get_settings()
     match s.effective_chat_provider:
         case "ollama":
@@ -50,6 +56,7 @@ def get_chat_model(settings: Settings | None = None) -> BaseChatModel:
                 api_version=s.azure_openai_api_version,
                 temperature=s.temperature,
                 max_retries=5,  # honours Retry-After on 429s
+                callbacks=[SpendGuard(get_ledger(s), s.chat_model, tag)],  # hard cost cap on every paid call
                 **_azure_auth(s),
             )
     raise ValueError(f"Unsupported chat provider: {s.effective_chat_provider}")

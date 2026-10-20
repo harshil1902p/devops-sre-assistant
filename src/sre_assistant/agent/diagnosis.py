@@ -8,7 +8,9 @@ retriever never produced is a hallucination and is removed and reported.
 import re
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+_CTRL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
 class Diagnosis(BaseModel):
@@ -21,7 +23,18 @@ class Diagnosis(BaseModel):
     immediate_mitigation: list[str] = Field(description="safe steps to restore service now")
     permanent_fix: list[str] = Field(description="changes that prevent recurrence (code/config/alerts)")
     citations: list[str] = Field(description="runbook citations exactly as returned by search_runbooks")
-    open_questions: list[str] = Field(default_factory=list, description="what is still unknown or unverified")
+    separate_issues: list[str] = Field(
+        description="other, independent problems seen in the window (with time and evidence); empty if none"
+    )
+    open_questions: list[str] = Field(description="what is still unknown or unverified")
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _strip_control_chars(cls, v):
+        def clean(s):
+            return _CTRL.sub("", s) if isinstance(s, str) else s
+
+        return [clean(x) for x in v] if isinstance(v, list) else clean(v)
 
 
 class GroundingReport(BaseModel):
@@ -67,6 +80,8 @@ def render_markdown(d: Diagnosis, g: GroundingReport) -> str:
         "### Sources",
         bullets(g.valid_citations),
     ]
+    if d.separate_issues:
+        parts += ["### Separate issues in the same window", bullets(d.separate_issues)]
     if d.open_questions:
         parts += ["### Open questions", bullets(d.open_questions)]
     if g.warnings:

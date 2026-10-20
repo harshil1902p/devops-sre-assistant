@@ -21,11 +21,12 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from mcp.client import Client
 from mcp.client.stdio import StdioServerParameters
 
-from sre_assistant.agent.costs import estimate_cost
 from sre_assistant.agent.graph import build_graph, usage_summary
 from sre_assistant.agent.mcp_tools import load_mcp_tools
 from sre_assistant.config import get_settings
 from sre_assistant.llm import get_chat_model
+from sre_assistant.llm.providers import get_ledger
+from sre_assistant.llm.spend import price
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -54,7 +55,7 @@ async def run(question: str, thread: str, service: str | None, since: int, use_m
             dsn = s.database_url.get_secret_value()
             saver = await stack.enter_async_context(AsyncPostgresSaver.from_conn_string(dsn))
             await saver.setup()
-        graph = build_graph(get_chat_model(s), tools, checkpointer=saver)
+        graph = build_graph(get_chat_model(s, tag=f"agent:{thread}"), tools, checkpointer=saver)
         config = {"configurable": {"thread_id": thread}, "recursion_limit": 40}
 
         inputs: dict = {"messages": [("user", question)], "since_minutes": since}
@@ -68,7 +69,11 @@ async def run(question: str, thread: str, service: str | None, since: int, use_m
 
     calls = state.get("llm_calls", [])[before:]
     usage = usage_summary(calls)
-    usage["cost_usd"] = estimate_cost(s.chat_model, usage["input_tokens"], usage["output_tokens"])
+    paid = s.effective_chat_provider != "ollama"
+    usage["cost_usd_upper_bound"] = (
+        round(price(s.chat_model, usage["input_tokens"], usage["output_tokens"]), 5) if paid else 0
+    )
+    usage["project_spend_usd"] = get_ledger(s).total() if paid else 0
     usage["wall_seconds"] = round(time.perf_counter() - t, 1)
     result = {
         "thread": thread,

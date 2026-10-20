@@ -107,10 +107,14 @@ class ConfigReport(BaseModel):
     file: str | None = None
     content: str | None = None
     redactions: int = 0
+    precedence: str = Field(
+        "Environment variables override config-file values (12-factor). Recommend changing the source that wins.",
+        description="how this service resolves configuration",
+    )
 
 
 class RunbookHit(BaseModel):
-    citation: str = Field(description="cite this id in answers, e.g. 'RB-AUTH-DB-POOL § Permanent Fix'")
+    citation: str = Field(description="cite exactly as given, e.g. '[RB-AUTH-DB-POOL] Permanent Fix'")
     doc_id: str
     doc_type: str
     title: str

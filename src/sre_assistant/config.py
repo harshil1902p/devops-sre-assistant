@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     rerank_candidates: int = Field(30, ge=1, description="fused child chunks scored by the cross-encoder")
     keyword_max_df: float = Field(0.25, gt=0, le=1, description="drop query terms in > this share of chunks")
 
+    # --- Cost control (paid providers only) ---
+    spend_limit_usd: float = Field(1.50, ge=0, description="hard cap on estimated paid LLM spend for this project")
+    spend_ledger_path: str = ".audit/spend.jsonl"
+
     # --- MCP server ---
     docker_host: str | None = Field(None, description="Docker API URL; auto-detects DOCKER_HOST / Colima socket")
     mcp_log_max_tokens: int = Field(2500, ge=300, description="token budget for inspect_live_logs output")

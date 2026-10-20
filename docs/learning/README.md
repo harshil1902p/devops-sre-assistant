@@ -15,8 +15,8 @@ This folder is your study guide for the project. Each phase has one file with th
 | 1 | Demo service & corpus | [01-demo-service-and-corpus.md](01-demo-service-and-corpus.md) | Structured logs, liveness vs readiness, pool vs DB limits, OOMKilled/137, metadata schema, hard negatives, drift tests |
 | 2 | Hybrid RAG | [02-hybrid-rag.md](02-hybrid-rag.md) | Parent-child (small-to-big) chunking, pgvector/HNSW, tsvector vs BM25, RRF, cross-encoder reranking, incremental ingestion, retrieval metrics |
 | 3 | MCP server | [03-mcp-server.md](03-mcp-server.md) | MCP primitives (tools/resources/prompts), transports, tool design for LLMs, log fingerprinting, redaction, least privilege, socket proxy, event persistence, audit |
-| 4 | Agent | *(next)* | ReAct, tool calling, LangGraph state/graph, memory, citations |
-| 5 | Guardrails | — | Redaction (spaCy + regex), prompt injection, human-in-the-loop, audit |
+| 4 | Agent | [04-agent.md](04-agent.md) | Workflow vs agent, LangGraph state/reducers/checkpointer, ReAct, guards, incident windows, grounding, structured output, keyless Azure OpenAI, spend cap, publishing safely |
+| 5 | Guardrails | *(next)* | Redaction (spaCy + regex), prompt injection, human-in-the-loop, audit |
 | 6 | Evaluation | — | Golden sets, recall@k/MRR, LLM-as-a-Judge, faithfulness, CI gates |
 | 7 | Azure | — | Azure OpenAI, AI Search hybrid + semantic ranker, Monitor/KQL, Key Vault, Managed Identity, Bicep |
 | 8 | Production | — | AuthN/Z, OpenTelemetry, cost/token tracking, scaling, AKS |

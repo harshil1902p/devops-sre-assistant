@@ -28,7 +28,8 @@ def diag(**over) -> Diagnosis:
         service="auth-service", status="degraded", summary="Redis stalls cause login timeouts.",
         evidence=["inspect_live_logs: redis.exceptions.TimeoutError x5"], root_cause="Redis blocked by slow command",
         confidence="high", immediate_mitigation=["Stop the offending job (requires approval)"],
-        permanent_fix=["Fail-open rate limiter"], citations=["RB-AUTH-REDIS-TIMEOUT § Root Cause"], open_questions=[],
+        permanent_fix=["Fail-open rate limiter"], citations=["[RB-AUTH-REDIS-TIMEOUT] Root Cause"], separate_issues=[],
+        open_questions=[],
     )  # fmt: skip
     return Diagnosis(**(base | over))
 
@@ -56,7 +57,7 @@ async def test_happy_path_triage_search_respond_and_citation_check():
             {"query": "redis.exceptions.TimeoutError: Timeout reading from socket", "service": "auth-service"},
         ),  # fmt: skip
         AIMessage("READY"),
-        diag(citations=["RB-AUTH-REDIS-TIMEOUT § Root Cause", "RB-INVENTED-999 § Fix"]),
+        diag(citations=["[RB-AUTH-REDIS-TIMEOUT] Root Cause", "[RB-INVENTED-999] Fix"]),
     ]
     result, model, _, _ = await run_graph(script, "auth-service is throwing 500s")
 
@@ -65,8 +66,8 @@ async def test_happy_path_triage_search_respond_and_citation_check():
     assert tool_names == ["check_system_health", "inspect_live_logs", "get_recent_events"], "triage prefetch"
     assert any("TIMELINE for auth-service" in str(m.content) for m in first_prompt)
     assert result["service"] == "auth-service", "service named in question: no intake LLM call"
-    assert result["diagnosis"]["citations"] == ["RB-AUTH-REDIS-TIMEOUT § Root Cause"]
-    assert result["grounding"]["invalid_citations"] == ["RB-INVENTED-999 § Fix"]
+    assert result["diagnosis"]["citations"] == ["[RB-AUTH-REDIS-TIMEOUT] Root Cause"]
+    assert result["grounding"]["invalid_citations"] == ["[RB-INVENTED-999] Fix"]
     assert "Diagnosis: `auth-service` is **degraded**" in result["messages"][-1].content
     assert [c["node"] for c in result["llm_calls"]] == ["agent", "agent", "respond"]
 
@@ -101,7 +102,7 @@ async def test_parallel_tool_calls_beyond_budget_are_refused():
 async def test_intake_llm_picks_service_when_not_named():
     from sre_assistant.agent.graph import Intake
 
-    script = [Intake(service="auth-service", since_minutes=15), call("search_runbooks", {"query": "x y z"}),
+    script = [Intake(service="auth-service", since_minutes=15), call("search_runbooks", {"query": "redis timeout"}),
               AIMessage("READY"), diag()]  # fmt: skip
     result, _, _, _ = await run_graph(script, "logins are failing for customers")
     assert result["service"] == "auth-service" and result["since_minutes"] == 15
@@ -112,7 +113,7 @@ async def test_followup_reuses_thread_and_compacts_old_tool_outputs():
     first = [call("search_runbooks", {"query": "redis timeout"}), AIMessage("READY"), diag()]
     await run_graph(first, "auth-service is failing", saver=saver)
     second = [
-        AIMessage("Set socket_timeout to 1s and make the limiter fail-open [RB-AUTH-REDIS-TIMEOUT § Root Cause].")
+        AIMessage("Set socket_timeout to 1s and make the limiter fail-open [[RB-AUTH-REDIS-TIMEOUT] Root Cause].")
     ]
     result, model, _, _ = await run_graph(second, "what exactly should I change?", saver=saver)
     assert result["messages"][-1].content.startswith("Set socket_timeout")
@@ -123,8 +124,8 @@ async def test_followup_reuses_thread_and_compacts_old_tool_outputs():
 
 # ------------------------------------------------------------------ pure units
 def test_grounding_flags_missing_search_and_invented_ids():
-    g = check_grounding(diag(citations=["KB-0004 § Q", "RB-NOPE § X"]), {"KB-0004"}, {"inspect_live_logs"})
-    assert g.valid_citations == ["KB-0004 § Q"] and g.invalid_citations == ["RB-NOPE § X"]
+    g = check_grounding(diag(citations=["[KB-0004] Q", "[RB-NOPE] X"]), {"KB-0004"}, {"inspect_live_logs"})
+    assert g.valid_citations == ["[KB-0004] Q"] and g.invalid_citations == ["[RB-NOPE] X"]
     assert any("no runbook search" in w for w in g.warnings)
 
 
@@ -136,9 +137,17 @@ def test_timeline_orders_events_errors_and_trends():
                           "numeric": {"rss_mb": {"min": 80, "max": 276, "last": 80}}}]}  # fmt: skip
     events = {"events": [{"time": "2025-01-01T19:58:27+00:00", "action": "oom", "detail": "x"},
                          {"time": "2025-01-01T19:58:27+00:00", "action": "die", "detail": "exitCode=137"}]}  # fmt: skip
-    tl = build_timeline({"status": "running"}, logs, events)
-    body = [line[:8] + " " + line.split(" ")[1] for line in tl[1:]]
-    assert body == ["19:56:03 ERRORS", "19:58:20 TREND", "19:58:27 EVENT", "19:58:27 EVENT", "19:58:29 LOG"]
+    tl, windows_struct = build_timeline({"status": "running"}, logs, events)
+    rows = [line for line in tl if line[:2].isdigit()]
+    assert [r[:8] + " " + r.split(" ")[1] for r in rows] == [
+        "19:56:03 ERRORS", "19:58:20 TREND", "19:58:27 EVENT", "19:58:27 EVENT", "19:58:29 LOG"]  # fmt: skip
+    windows = [line for line in tl if line.startswith("  #")]
+    assert len(windows) == 2, "error burst and OOM are separated by a quiet gap"
+    assert "error burst" in windows[0] and "OOM kill" in windows[1] and "memory growth" in windows[1]
+    from sre_assistant.agent.timeline import uncovered_windows
+
+    assert [w["index"] for w in uncovered_windows(windows_struct, ["sqlalchemy QueuePool TimeoutError"])] == [2]
+    assert uncovered_windows(windows_struct, ["QueuePool limit", "container OOMKilled exit code 137"]) == []
 
 
 def test_compaction_keeps_current_turn_and_respects_budget():
@@ -150,3 +159,25 @@ def test_compaction_keeps_current_turn_and_respects_budget():
     out = compact(msgs, max_tokens=100_000)
     assert "elided (previous turn" in out[2].content and out[7].content == big
     assert "internal_note" in out[5].additional_kwargs, "internal notes don't start a new turn"
+
+
+async def test_followup_strips_stray_ready_marker():
+    saver = InMemorySaver()
+    await run_graph(
+        [call("search_runbooks", {"query": "redis timeout"}), AIMessage("READY"), diag()],
+        "auth-service down",
+        saver=saver,
+    )
+    result, _, _, _ = await run_graph([AIMessage("Change DB_POOL_SIZE.\n\nREADY")], "what to change?", saver=saver)
+    assert result["messages"][-1].content == "Change DB_POOL_SIZE."
+
+
+async def test_coverage_guard_reminds_about_uninvestigated_window():
+    # FakeBackend logs contain a redis TimeoutError burst; searching only something unrelated must trigger a reminder.
+    script = [call("search_runbooks", {"query": "disk full"}, 1), AIMessage("READY"),
+              call("search_runbooks", {"query": "redis.exceptions.TimeoutError Timeout reading"}, 2), AIMessage("READY"),
+              diag()]  # fmt: skip
+    result, model, _, _ = await run_graph(script, "auth-service errors")
+    reminder = [m for m in model.prompts[2] if "Not yet investigated" in str(m.content)]
+    assert reminder and "error burst" in reminder[0].content
+    assert result["search_queries"] == ["disk full", "redis.exceptions.TimeoutError Timeout reading"]
