@@ -124,9 +124,7 @@ def _code(lang: str, code: str) -> str:
 
 
 def render_runbook(s: Scenario, kb_id: str) -> str:
-    meta = _base_meta(
-        s, s.runbook_id, "runbook", f"Runbook: {s.title}", "any", s.postmortem.date + timedelta(days=7)
-    )
+    meta = _base_meta(s, s.runbook_id, "runbook", f"Runbook: {s.title}", "any", s.postmortem.date + timedelta(days=7))
     fix_code = f"\n\n{_code(s.config_example.lang, s.config_example.code)}" if s.config_example else ""
     body = f"""# Runbook: {s.title}
 

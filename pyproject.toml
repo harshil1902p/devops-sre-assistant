@@ -11,6 +11,8 @@ dependencies = [
     "langchain-ollama>=0.2",
     "httpx>=0.28.1",
     "pyyaml>=6.0.3",
+    "fastembed>=0.4",
+    "onnxruntime<1.20 ; platform_machine == 'x86_64' and sys_platform == 'darwin'",
 ]
 
 [dependency-groups]
@@ -34,8 +36,10 @@ markers = [
 addopts = "-m 'not integration'"
 
 [tool.ruff]
-line-length = 110
+line-length = 120
 target-version = "py312"
+# Generated data must never be rewritten by a formatter (ruff also formats code blocks inside Markdown).
+extend-exclude = ["data"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
@@ -43,3 +47,4 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 [tool.ruff.lint.per-file-ignores]
 # Markdown templates: line breaks inside them would change the rendered documents.
 "src/sre_assistant/corpus/generate.py" = ["E501"]
+"tests/**" = ["E501"]

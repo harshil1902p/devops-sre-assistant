@@ -1,0 +1,39 @@
+# Hand-written retrieval queries (Phase 2 benchmark; Phase 6 grows this into the full golden set).
+# Rules: never copy-paste from the corpus. Log queries use different numbers/hosts/paths;
+# symptom queries are phrased the way an on-call engineer would type them.
+# `scenario` is the expected answer (see data/corpus/manifest.json for its 3 documents).
+
+- {scenario: db-pool-exhaustion, kind: log, query: "sqlalchemy.exc.TimeoutError: QueuePool limit of size 10 overflow 20 reached, connection timed out, timeout 30.00"}
+- {scenario: db-pool-exhaustion, kind: symptom, query: "login requests fail after exactly 5 seconds with 500 but postgres cpu is low and has plenty of free connections"}
+- {scenario: pg-too-many-connections, kind: log, query: "connection to server at 10.2.0.7 port 5432 failed: FATAL: sorry, too many clients already"}
+- {scenario: pg-too-many-connections, kind: symptom, query: "after the HPA scaled our API to 30 pods the database started rejecting new connections immediately"}
+- {scenario: pg-deadlock, kind: log, query: "ERROR: deadlock detected DETAIL: Process 771 waits for ShareLock on transaction 5521; blocked by process 802 SQLSTATE 40P01"}
+- {scenario: pg-deadlock, kind: symptom, query: "two concurrent money transfers between the same accounts randomly abort and one of them fails"}
+- {scenario: disk-full, kind: log, query: "PANIC: could not write to file pg_wal/xlogtemp.88: No space left on device"}
+- {scenario: disk-full, kind: symptom, query: "postgres volume is at 100 percent and the wal directory keeps growing even though checkpoints are running"}
+- {scenario: redis-timeout, kind: log, query: "redis.exceptions.TimeoutError: Timeout reading from socket in rate_limiter.incr"}
+- {scenario: redis-timeout, kind: symptom, query: "redis ping works but some cache calls hang for a second and then time out, slowlog shows a KEYS command"}
+- {scenario: redis-connection-refused, kind: log, query: "[ioredis] Unhandled error event: Error: connect ECONNREFUSED 10.1.9.44:6379"}
+- {scenario: redis-connection-refused, kind: symptom, query: "after the AKS node pool upgrade the node service can't reach redis at the IP in our configmap"}
+- {scenario: kafka-rebalance, kind: log, query: "CommitFailedError: Commit cannot be completed since the group has already rebalanced and assigned the partitions to another member"}
+- {scenario: kafka-rebalance, kind: symptom, query: "consumer lag keeps growing and the same order events are being processed twice"}
+- {scenario: oom-killed, kind: log, query: "Last State: Terminated Reason: OOMKilled Exit Code: 137 Restart Count: 6"}
+- {scenario: oom-killed, kind: symptom, query: "our python pod restarts every half hour, memory climbs steadily and the logs stop with no exception"}
+- {scenario: crashloop-missing-env, kind: log, query: "KeyError: 'REDIS_URL' Back-off restarting failed container worker in pod"}
+- {scenario: crashloop-missing-env, kind: symptom, query: "after rotating secrets the new pods crash immediately on startup and never become ready"}
+- {scenario: image-pull-backoff, kind: log, query: "Failed to pull image myregistry.azurecr.io/payments:2.0.1: failed to fetch anonymous token: unexpected status: 401 Unauthorized"}
+- {scenario: image-pull-backoff, kind: symptom, query: "we recreated the AKS cluster and now new pods can't download images from our container registry"}
+- {scenario: liveness-probe-dependency, kind: log, query: "Warning Unhealthy Liveness probe failed: HTTP probe failed with statuscode: 503 Killing container"}
+- {scenario: liveness-probe-dependency, kind: symptom, query: "a 20 second redis failover caused every replica of the service to be restarted at the same time"}
+- {scenario: jvm-heap-oom, kind: log, query: "Exception in thread main java.lang.OutOfMemoryError: Java heap space at ReportBuilder.toCsv"}
+- {scenario: jvm-heap-oom, kind: symptom, query: "java export job fails with heap errors even though the container limit is 4Gi and usage looks low"}
+- {scenario: gateway-504, kind: log, query: "upstream timed out (110: Connection timed out) while reading response header from upstream, request: POST /v2/exports"}
+- {scenario: gateway-504, kind: symptom, query: "one slow endpoint returns 504 from the ingress after exactly 60 seconds while the pods look healthy"}
+- {scenario: gateway-502, kind: log, query: "connect() failed (111: Connection refused) while connecting to upstream 502 Bad Gateway"}
+- {scenario: gateway-502, kind: symptom, query: "we see a short burst of 502 errors every time we do a rolling deployment"}
+- {scenario: tls-cert-expired, kind: log, query: "x509: certificate has expired or is not yet valid: current time 2025-09-01 is after 2025-08-30"}
+- {scenario: tls-cert-expired, kind: symptom, query: "all https clients started failing at midnight and browsers show the certificate date is invalid"}
+- {scenario: dns-resolution, kind: log, query: "socket.gaierror: [Errno -3] Temporary failure in name resolution api.payments-provider.com"}
+- {scenario: dns-resolution, kind: symptom, query: "outbound calls to external apis randomly fail to resolve hostnames during traffic peaks, coredns cpu is high"}
+- {scenario: azure-openai-429, kind: log, query: "openai.RateLimitError: Error code: 429 exceeded token rate limit of your current pricing tier. Please retry after 12 seconds"}
+- {scenario: azure-openai-429, kind: symptom, query: "our llm calls get throttled whenever the nightly evaluation job runs at the same time as users"}

@@ -26,6 +26,22 @@ class Settings(BaseSettings):
     azure_openai_api_version: str = "2024-10-21"
     azure_openai_api_key: SecretStr | None = None
 
+    database_url: SecretStr = SecretStr("postgresql://sre:REMOVED-VECTORDB-PASSWORD@localhost:5433/sre")
+
+    # --- RAG ---
+    child_max_tokens: int = Field(128, ge=32, description="max tokens of a matched child chunk")
+    parent_max_tokens: int = Field(1500, ge=200, description="docs up to this size are one parent")
+    naive_chunk_tokens: int = Field(256, ge=50)
+    naive_chunk_overlap: int = Field(32, ge=0)
+    candidate_k: int = Field(20, ge=1, description="hits fetched from EACH retriever before fusion")
+    rrf_k: int = Field(60, ge=1, description="Reciprocal Rank Fusion damping constant")
+    top_parents: int = Field(3, ge=1, description="parents (documents/sections) returned to the LLM")
+    reranker_model: str | None = Field(
+        "Xenova/ms-marco-MiniLM-L-6-v2", description="fastembed cross-encoder; empty to disable reranking"
+    )
+    rerank_candidates: int = Field(30, ge=1, description="fused child chunks scored by the cross-encoder")
+    keyword_max_df: float = Field(0.25, gt=0, le=1, description="drop query terms in > this share of chunks")
+
     @model_validator(mode="after")
     def _check_azure(self) -> "Settings":
         if self.llm_provider == "azure_openai" and not self.azure_openai_endpoint:

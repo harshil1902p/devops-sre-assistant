@@ -42,9 +42,7 @@ LOGGING_CONFIG = {
     "version": 1,
     "disable_existing_loggers": False,
     "formatters": {"json": {"()": JsonFormatter}},
-    "handlers": {
-        "stdout": {"class": "logging.StreamHandler", "formatter": "json", "stream": "ext://sys.stdout"}
-    },
+    "handlers": {"stdout": {"class": "logging.StreamHandler", "formatter": "json", "stream": "ext://sys.stdout"}},
     "root": {"level": "INFO", "handlers": ["stdout"]},
     "loggers": {
         "uvicorn": {"level": "INFO", "handlers": [], "propagate": True},

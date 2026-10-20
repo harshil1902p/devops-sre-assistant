@@ -9,6 +9,7 @@ from langchain_core.embeddings import Embeddings
 from langchain_core.language_models import BaseChatModel
 
 from sre_assistant.config import Settings, get_settings
+from sre_assistant.llm.embeddings import PrefixedEmbeddings
 
 
 def get_chat_model(settings: Settings | None = None) -> BaseChatModel:
@@ -32,19 +33,22 @@ def get_chat_model(settings: Settings | None = None) -> BaseChatModel:
 
 
 def get_embeddings(settings: Settings | None = None) -> Embeddings:
+    """Embeddings wrapped with the model's query/document instruction prefixes (if any)."""
     s = settings or get_settings()
     match s.llm_provider:
         case "ollama":
             from langchain_ollama import OllamaEmbeddings
 
-            return OllamaEmbeddings(model=s.embedding_model, base_url=s.ollama_base_url)
+            inner = OllamaEmbeddings(model=s.embedding_model, base_url=s.ollama_base_url)
         case "azure_openai":
             from langchain_openai import AzureOpenAIEmbeddings
 
-            return AzureOpenAIEmbeddings(
+            inner = AzureOpenAIEmbeddings(
                 azure_deployment=s.embedding_model,
                 azure_endpoint=s.azure_openai_endpoint,
                 api_version=s.azure_openai_api_version,
                 api_key=s.azure_openai_api_key,
             )
-    raise ValueError(f"Unsupported provider: {s.llm_provider}")
+        case _:
+            raise ValueError(f"Unsupported provider: {s.llm_provider}")
+    return PrefixedEmbeddings(inner, s.embedding_model)

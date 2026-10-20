@@ -30,4 +30,6 @@ def test_secret_not_leaked_in_repr():
 def test_provider_factory_returns_ollama_clients():
     s = Settings(_env_file=None)
     assert type(get_chat_model(s)).__name__ == "ChatOllama"
-    assert type(get_embeddings(s)).__name__ == "OllamaEmbeddings"
+    emb = get_embeddings(s)
+    assert type(emb.inner).__name__ == "OllamaEmbeddings"
+    assert emb.query_prefix == "search_query: " and emb.doc_prefix == "search_document: "

@@ -1,0 +1,312 @@
+{
+  "embedding_model": "nomic-embed-text",
+  "results": [
+    {
+      "config": "naive  | vector         | top5",
+      "all": {
+        "hit@1": 0.853,
+        "hit@3": 1,
+        "rr": 0.917,
+        "fix_in_ctx": 0.912,
+        "ctx_tokens": 1113.235
+      },
+      "log": {
+        "hit@1": 0.941,
+        "hit@3": 1,
+        "rr": 0.971,
+        "fix_in_ctx": 0.941,
+        "ctx_tokens": 1125.176
+      },
+      "symptom": {
+        "hit@1": 0.765,
+        "hit@3": 1,
+        "rr": 0.863,
+        "fix_in_ctx": 0.882,
+        "ctx_tokens": 1101.294
+      },
+      "p50_latency_ms": 56.5,
+      "misses": [
+        [
+          "db-pool-exhaustion",
+          [
+            "pg-too-many-connections",
+            "db-pool-exhaustion"
+          ],
+          "login requests fail after exactly 5 seconds with 500 but postgres cpu "
+        ],
+        [
+          "pg-deadlock",
+          [
+            "pg-too-many-connections",
+            "pg-deadlock"
+          ],
+          "two concurrent money transfers between the same accounts randomly abor"
+        ],
+        [
+          "crashloop-missing-env",
+          [
+            "redis-connection-refused",
+            "crashloop-missing-env"
+          ],
+          "KeyError: 'REDIS_URL' Back-off restarting failed container worker in p"
+        ],
+        [
+          "liveness-probe-dependency",
+          [
+            "redis-timeout",
+            "redis-timeout"
+          ],
+          "a 20 second redis failover caused every replica of the service to be r"
+        ],
+        [
+          "gateway-504",
+          [
+            "gateway-502",
+            "gateway-502"
+          ],
+          "one slow endpoint returns 504 from the ingress after exactly 60 second"
+        ]
+      ]
+    },
+    {
+      "config": "naive  | hybrid         | top5",
+      "all": {
+        "hit@1": 0.971,
+        "hit@3": 1,
+        "rr": 0.985,
+        "fix_in_ctx": 0.941,
+        "ctx_tokens": 1123.118
+      },
+      "log": {
+        "hit@1": 0.941,
+        "hit@3": 1,
+        "rr": 0.971,
+        "fix_in_ctx": 0.941,
+        "ctx_tokens": 1134.765
+      },
+      "symptom": {
+        "hit@1": 1,
+        "hit@3": 1,
+        "rr": 1.0,
+        "fix_in_ctx": 0.941,
+        "ctx_tokens": 1111.471
+      },
+      "p50_latency_ms": 67.2,
+      "misses": [
+        [
+          "crashloop-missing-env",
+          [
+            "redis-connection-refused",
+            "crashloop-missing-env"
+          ],
+          "KeyError: 'REDIS_URL' Back-off restarting failed container worker in p"
+        ]
+      ]
+    },
+    {
+      "config": "parent | vector         | top3",
+      "all": {
+        "hit@1": 0.912,
+        "hit@3": 0.971,
+        "rr": 0.94,
+        "fix_in_ctx": 0.971,
+        "ctx_tokens": 1394.647
+      },
+      "log": {
+        "hit@1": 0.941,
+        "hit@3": 0.941,
+        "rr": 0.949,
+        "fix_in_ctx": 0.941,
+        "ctx_tokens": 1347.235
+      },
+      "symptom": {
+        "hit@1": 0.882,
+        "hit@3": 1,
+        "rr": 0.931,
+        "fix_in_ctx": 1,
+        "ctx_tokens": 1442.059
+      },
+      "p50_latency_ms": 73.3,
+      "misses": [
+        [
+          "crashloop-missing-env",
+          [
+            "redis-timeout",
+            "redis-timeout"
+          ],
+          "KeyError: 'REDIS_URL' Back-off restarting failed container worker in p"
+        ],
+        [
+          "liveness-probe-dependency",
+          [
+            "redis-timeout",
+            "redis-timeout"
+          ],
+          "a 20 second redis failover caused every replica of the service to be r"
+        ],
+        [
+          "azure-openai-429",
+          [
+            "gateway-502",
+            "azure-openai-429"
+          ],
+          "our llm calls get throttled whenever the nightly evaluation job runs a"
+        ]
+      ]
+    },
+    {
+      "config": "parent | keyword        | top3",
+      "all": {
+        "hit@1": 0.882,
+        "hit@3": 0.941,
+        "rr": 0.923,
+        "fix_in_ctx": 0.941,
+        "ctx_tokens": 1444.176
+      },
+      "log": {
+        "hit@1": 0.941,
+        "hit@3": 1,
+        "rr": 0.971,
+        "fix_in_ctx": 1,
+        "ctx_tokens": 1403.412
+      },
+      "symptom": {
+        "hit@1": 0.824,
+        "hit@3": 0.882,
+        "rr": 0.876,
+        "fix_in_ctx": 0.882,
+        "ctx_tokens": 1484.941
+      },
+      "p50_latency_ms": 15.1,
+      "misses": [
+        [
+          "crashloop-missing-env",
+          [
+            "redis-connection-refused",
+            "crashloop-missing-env"
+          ],
+          "KeyError: 'REDIS_URL' Back-off restarting failed container worker in p"
+        ],
+        [
+          "liveness-probe-dependency",
+          [
+            "redis-connection-refused",
+            "redis-timeout"
+          ],
+          "a 20 second redis failover caused every replica of the service to be r"
+        ],
+        [
+          "dns-resolution",
+          [
+            "image-pull-backoff",
+            "dns-resolution"
+          ],
+          "outbound calls to external apis randomly fail to resolve hostnames dur"
+        ],
+        [
+          "azure-openai-429",
+          [
+            "gateway-504",
+            "gateway-504"
+          ],
+          "our llm calls get throttled whenever the nightly evaluation job runs a"
+        ]
+      ]
+    },
+    {
+      "config": "parent | hybrid         | top3",
+      "all": {
+        "hit@1": 0.941,
+        "hit@3": 0.941,
+        "rr": 0.953,
+        "fix_in_ctx": 0.941,
+        "ctx_tokens": 1405.559
+      },
+      "log": {
+        "hit@1": 0.941,
+        "hit@3": 0.941,
+        "rr": 0.951,
+        "fix_in_ctx": 0.941,
+        "ctx_tokens": 1362
+      },
+      "symptom": {
+        "hit@1": 0.941,
+        "hit@3": 0.941,
+        "rr": 0.956,
+        "fix_in_ctx": 0.941,
+        "ctx_tokens": 1449.118
+      },
+      "p50_latency_ms": 77.4,
+      "misses": [
+        [
+          "crashloop-missing-env",
+          [
+            "redis-connection-refused",
+            "redis-connection-refused"
+          ],
+          "KeyError: 'REDIS_URL' Back-off restarting failed container worker in p"
+        ],
+        [
+          "liveness-probe-dependency",
+          [
+            "redis-timeout",
+            "redis-timeout"
+          ],
+          "a 20 second redis failover caused every replica of the service to be r"
+        ]
+      ]
+    },
+    {
+      "config": "parent | hybrid+rerank  | top3",
+      "all": {
+        "hit@1": 1,
+        "hit@3": 1,
+        "rr": 1.0,
+        "fix_in_ctx": 1,
+        "ctx_tokens": 1398.794
+      },
+      "log": {
+        "hit@1": 1,
+        "hit@3": 1,
+        "rr": 1.0,
+        "fix_in_ctx": 1,
+        "ctx_tokens": 1382.588
+      },
+      "symptom": {
+        "hit@1": 1,
+        "hit@3": 1,
+        "rr": 1.0,
+        "fix_in_ctx": 1,
+        "ctx_tokens": 1415
+      },
+      "p50_latency_ms": 1152.7,
+      "misses": []
+    },
+    {
+      "config": "parent | hybrid+rerank  | top2",
+      "all": {
+        "hit@1": 1,
+        "hit@3": 1,
+        "rr": 1.0,
+        "fix_in_ctx": 1,
+        "ctx_tokens": 1002.618
+      },
+      "log": {
+        "hit@1": 1,
+        "hit@3": 1,
+        "rr": 1.0,
+        "fix_in_ctx": 1,
+        "ctx_tokens": 1039.941
+      },
+      "symptom": {
+        "hit@1": 1,
+        "hit@3": 1,
+        "rr": 1.0,
+        "fix_in_ctx": 1,
+        "ctx_tokens": 965.294
+      },
+      "p50_latency_ms": 995.3,
+      "misses": []
+    }
+  ]
+}

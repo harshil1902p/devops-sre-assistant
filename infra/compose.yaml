@@ -1,0 +1,23 @@
+# The assistant's own infrastructure (separate from the demo "staging" stack it monitors).
+#   docker compose -f infra/compose.yaml up -d
+name: sre-assistant
+
+services:
+  vectordb:
+    image: pgvector/pgvector:0.8.0-pg16
+    environment:
+      POSTGRES_USER: sre
+      POSTGRES_PASSWORD: REMOVED-VECTORDB-PASSWORD
+      POSTGRES_DB: sre
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sre -d sre"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - vectordb-data:/var/lib/postgresql/data
+
+volumes:
+  vectordb-data:

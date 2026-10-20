@@ -33,7 +33,7 @@
 | MTTR reduction | Time 10 incidents diagnosed by hand vs with the assistant | 75–80% |
 | Retrieval quality | recall@5 / MRR: is the correct runbook in the top 5 results? | 90%+ |
 | Faithfulness | DeepEval LLM-as-a-Judge over the golden set | 90%+ |
-| Token cost | Tokens per diagnosis, naive chunking vs parent-child | ~30% fewer |
+| Token cost | Tokens per diagnosis, naive chunking vs parent-child | ~30% fewer (Phase 2 measured: **11% fewer** tokens at higher fix coverage, 1.00 vs 0.94, on short docs) |
 | Leakage prevention | Share of planted secrets/IPs masked by the redaction pipeline | 100% |
 
 Only put a number on your resume after you have measured it. Keep the raw results in `eval/results/`.
