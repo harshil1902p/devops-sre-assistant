@@ -1,0 +1,87 @@
+{
+  "redis-timeout": [
+    "RB-AUTH-REDIS-TIMEOUT",
+    "PM-INC-2025-0156",
+    "KB-0001"
+  ],
+  "redis-connection-refused": [
+    "RB-NOTIF-REDIS-REFUSED",
+    "PM-INC-2025-0233",
+    "KB-0002"
+  ],
+  "kafka-rebalance": [
+    "RB-ORD-KAFKA-REBALANCE",
+    "PM-INC-2025-0175",
+    "KB-0003"
+  ],
+  "db-pool-exhaustion": [
+    "RB-AUTH-DB-POOL",
+    "PM-INC-2025-0142",
+    "KB-0004"
+  ],
+  "pg-too-many-connections": [
+    "RB-PAY-PG-MAXCONN",
+    "PM-INC-2025-0211",
+    "KB-0005"
+  ],
+  "pg-deadlock": [
+    "RB-PAY-PG-DEADLOCK",
+    "PM-INC-2025-0187",
+    "KB-0006"
+  ],
+  "disk-full": [
+    "RB-ORD-DISK-FULL",
+    "PM-INC-2025-0098",
+    "KB-0007"
+  ],
+  "oom-killed": [
+    "RB-AUTH-OOMKILLED",
+    "PM-INC-2025-0164",
+    "KB-0008"
+  ],
+  "crashloop-missing-env": [
+    "RB-ORD-CRASHLOOP-ENV",
+    "PM-INC-2025-0120",
+    "KB-0009"
+  ],
+  "image-pull-backoff": [
+    "RB-PLAT-IMAGEPULL",
+    "PM-INC-2025-0249",
+    "KB-0010"
+  ],
+  "liveness-probe-dependency": [
+    "RB-AUTH-LIVENESS-DEP",
+    "PM-INC-2025-0071",
+    "KB-0011"
+  ],
+  "jvm-heap-oom": [
+    "RB-RPT-JVM-HEAP",
+    "PM-INC-2025-0193",
+    "KB-0012"
+  ],
+  "gateway-504": [
+    "RB-GW-504-UPSTREAM-TIMEOUT",
+    "PM-INC-2025-0219",
+    "KB-0013"
+  ],
+  "gateway-502": [
+    "RB-GW-502-UPSTREAM-REFUSED",
+    "PM-INC-2025-0241",
+    "KB-0014"
+  ],
+  "tls-cert-expired": [
+    "RB-GW-TLS-EXPIRED",
+    "PM-INC-2025-0031",
+    "KB-0015"
+  ],
+  "dns-resolution": [
+    "RB-PAY-DNS-EAI-AGAIN",
+    "PM-INC-2025-0204",
+    "KB-0016"
+  ],
+  "azure-openai-429": [
+    "RB-AI-AOAI-429",
+    "PM-INC-2025-0262",
+    "KB-0017"
+  ]
+}

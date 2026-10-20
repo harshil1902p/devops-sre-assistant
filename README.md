@@ -20,7 +20,7 @@ An AI production companion that diagnoses crashes, server errors and infrastruct
 | Phase | Deliverable | Status |
 |---|---|---|
 | 0 | Repo, typed config, provider abstraction (Ollama ⇄ Azure OpenAI), smoke test | ✅ |
-| 1 | Demo "auth-service" that really fails + synthetic runbook / post-mortem corpus | ⏳ |
+| 1 | Demo "auth-service" that really fails + synthetic runbook / post-mortem corpus | ✅ |
 | 2 | RAG: parent-child chunking, pgvector, hybrid search (vector + BM25, RRF) | ⏳ |
 | 3 | MCP server: `inspect_live_logs`, `check_system_health`, `read_env_config`, `search_runbooks` | ⏳ |
 | 4 | LangGraph ReAct agent wired to MCP tools, cited answers, memory | ⏳ |
@@ -37,6 +37,15 @@ cp .env.example .env
 uv sync
 uv run pytest
 uv run python scripts/smoke_test.py
+
+# Demo "staging" environment + failure injection
+colima start
+docker compose -f demo/compose.yaml up -d --build
+uv run python scripts/demo_chaos.py pool        # or: redis | oom | traffic | reset
+
+# Knowledge base (regenerate after editing data/scenarios/*.yaml)
+uv run python scripts/generate_corpus.py
+uv run pytest -m integration                    # live checks against the demo stack
 ```
 
 Learning notes and interview prep for each phase live in [docs/learning](docs/learning).

@@ -1,0 +1,74 @@
+# Demo "staging" environment the SRE assistant will monitor and diagnose.
+#   docker compose -f demo/compose.yaml up -d --build
+# Labels `sre.service` / `sre.environment` are how the MCP server (Phase 3) discovers containers,
+# just like Kubernetes label selectors.
+name: sre-demo
+
+x-sre-labels: &sre-env
+  sre.environment: staging
+
+services:
+  auth-service:
+    build: ./auth-service
+    ports:
+      - "8080:8080"
+    environment:
+      SERVICE_NAME: auth-service
+      ENVIRONMENT: staging
+      DATABASE_URL: postgresql+psycopg://auth:REMOVED-DEMO-DB-PASSWORD@auth-db:5432/auth
+      REDIS_URL: redis://auth-cache:6379/0
+      DB_POOL_SIZE: "5"
+      DB_MAX_OVERFLOW: "2"
+      DB_POOL_TIMEOUT: "5"
+      REDIS_SOCKET_TIMEOUT: "1.0"
+      CHAOS_ENABLED: "true"
+    labels:
+      <<: *sre-env
+      sre.service: auth-service
+    depends_on:
+      auth-db:
+        condition: service_healthy
+      auth-cache:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+    restart: on-failure:5
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  auth-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: auth
+      POSTGRES_PASSWORD: REMOVED-DEMO-DB-PASSWORD
+      POSTGRES_DB: auth
+    labels:
+      <<: *sre-env
+      sre.service: auth-db
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U auth -d auth"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - auth-db-data:/var/lib/postgresql/data
+
+  auth-cache:
+    image: redis:7-alpine
+    labels:
+      <<: *sre-env
+      sre.service: auth-cache
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  auth-db-data:

@@ -1,0 +1,363 @@
+# Scenario catalogue: Kubernetes / container runtime.
+
+- id: oom-killed
+  code: AUTH-OOMKILLED
+  title: Container OOMKilled (exit code 137) from an unbounded in-memory cache
+  service: auth-service
+  language: python
+  infrastructure: kubernetes
+  error_type: OOMKilled
+  severity: SEV2
+  error_codes:
+    - "OOMKilled"
+    - "exit code 137"
+    - "Reason: OOMKilled"
+    - "die 137"
+  tags: [memory, memory-leak, oom, container, limits, restarts]
+  log_excerpt: |
+    {"level": "INFO", "logger": "auth.runtime", "msg": "runtime stats", "rss_mb": 115.7}
+    {"level": "INFO", "logger": "auth.runtime", "msg": "runtime stats", "rss_mb": 175.8}
+    {"level": "INFO", "logger": "auth.runtime", "msg": "runtime stats", "rss_mb": 223.8}
+    {"level": "INFO", "logger": "auth.api", "msg": "starting auth-service (env=production)"}
+    # kubectl describe pod: Last State: Terminated  Reason: OOMKilled  Exit Code: 137
+  symptoms:
+    - "Pod/container restarts; restart count increases; brief connection resets for in-flight requests."
+    - "Memory (RSS) climbs steadily between restarts, then drops back after each restart (saw-tooth)."
+    - "No Python exception in the logs: the kernel kills the process with SIGKILL, so the app cannot log."
+    - "`kubectl describe pod` shows `Last State: Terminated, Reason: OOMKilled, Exit Code: 137`."
+  root_cause: |
+    The container exceeded its memory limit (256Mi) and the kernel OOM killer sent SIGKILL (128 + 9 = exit 137).
+    The process memory grew because an in-process cache had no size bound or TTL, so every unique key stayed
+    in memory forever. Restarting hides the leak until memory fills again.
+  diagnosis:
+    - "Confirm it was the OOM killer, not a crash: exit code 137 + `OOMKilled` reason. Exit code 1 would be an app error; 143 is SIGTERM (graceful)."
+    - "Evidence disappears on restart: use `kubectl logs --previous` and `kubectl describe pod` (Last State). On Docker, `docker events --filter event=oom` shows `oom` followed by `die` with exitCode 137; `docker inspect` State is reset by the restart."
+    - "Plot RSS over time (runtime stats or container_memory_working_set_bytes). Steady growth = leak; sudden spike = large request/batch."
+    - "Profile memory in staging with `tracemalloc` or `memray` to find the growing allocation site."
+  diagnosis_commands: |
+    # Kubernetes
+    kubectl -n auth describe pod -l app=auth-service | grep -A6 'Last State'
+    kubectl -n auth logs deploy/auth-service --previous --tail=50
+    kubectl -n auth top pod -l app=auth-service
+    # Docker
+    docker events --since 30m --filter container=sre-demo-auth-service-1 --filter event=oom --filter event=die
+    docker stats --no-stream sre-demo-auth-service-1
+  mitigation:
+    - "Temporarily raise the memory limit (e.g., 256Mi -> 512Mi) to reduce restart frequency while you fix the leak."
+    - "Roll back the release that introduced the growth if one is identified."
+  permanent_fix:
+    - "Bound the cache: `functools.lru_cache(maxsize=...)`, `cachetools.TTLCache`, or move the cache to Redis."
+    - "Set requests close to real usage and limits with headroom; alert on memory > 85% of limit."
+    - "Add a memory regression test / soak test in CI for long-running endpoints."
+  config_example:
+    lang: yaml
+    code: |
+      resources:
+        requests:
+          memory: "256Mi"
+          cpu: "100m"
+        limits:
+          memory: "512Mi"
+  postmortem:
+    incident_id: INC-2025-0164
+    date: 2025-05-02
+    environment: production
+    duration_min: 210
+    impact: "auth-service pods restarted every ~25 minutes for 3.5 hours; 0.4% of logins failed with connection resets."
+    detection: "Alert on pod restart count > 3 in 30 minutes."
+    timeline:
+      - "09:30 Release v2.33 adds an in-process cache of user profiles keyed by session token."
+      - "10:05 First OOMKilled restart; no errors in application logs."
+      - "11:10 On-call notices memory saw-tooth pattern in Grafana and exit code 137 in `kubectl describe`."
+      - "12:20 tracemalloc in staging points to the profile cache dict growing without bound."
+      - "13:00 Hotfix replaces dict with TTLCache(maxsize=10000, ttl=300); restarts stop."
+    trigger: "Unbounded dictionary cache keyed by unique session tokens."
+    resolution: "Bounded TTL cache, memory alert at 85% of limit, limit raised to 512Mi."
+    action_items:
+      - "Add memory soak test to the CI pipeline (owner: auth team)."
+      - "Add alert on container memory > 85% of limit (owner: SRE)."
+    lesson: "OOMKilled leaves no application error; look at exit code 137, previous logs and memory trends."
+  kb:
+    title: "Kubernetes pod restarts with exit code 137 and no error in logs"
+    question: |
+      Our Python pod restarts every 20-30 minutes. Logs end abruptly with no exception.
+      `kubectl get pods` shows restarts increasing. What does exit code 137 mean?
+    answer: |
+      137 = 128 + 9 (SIGKILL). In Kubernetes it almost always means the container hit its memory limit and the
+      kernel OOM killer terminated it (`Reason: OOMKilled` in `kubectl describe pod`). The app can't log because
+      SIGKILL can't be caught. Check memory over time; a steady climb is a leak (often an unbounded cache).
+      Use `kubectl logs --previous` to see logs from the killed container.
+    comment: "If Reason is 'Error' with 137 it can also be a liveness probe kill. Check events too."
+
+- id: crashloop-missing-env
+  code: ORD-CRASHLOOP-ENV
+  title: CrashLoopBackOff on startup due to a missing environment variable / secret
+  service: orders-worker
+  language: python
+  infrastructure: kubernetes
+  error_type: KeyError
+  severity: SEV2
+  error_codes:
+    - "CrashLoopBackOff"
+    - "KeyError: 'DATABASE_URL'"
+    - "Back-off restarting failed container"
+    - "CreateContainerConfigError"
+  tags: [kubernetes, secrets, configmap, startup, deployment]
+  log_excerpt: |
+    Traceback (most recent call last):
+      File "/srv/app/config.py", line 14, in load_config
+        database_url=os.environ["DATABASE_URL"],
+    KeyError: 'DATABASE_URL'
+    Warning  BackOff  kubelet  Back-off restarting failed container orders-worker
+  symptoms:
+    - "Pods never become Ready; status CrashLoopBackOff with exponential back-off between restarts."
+    - "Exit code 1 with a configuration exception at startup."
+  root_cause: |
+    The new Deployment referenced a Secret key renamed during a secret rotation (`DATABASE_URL` -> `DB_URL`).
+    The app fails fast at startup. If the referenced Secret itself doesn't exist, the pod instead shows
+    `CreateContainerConfigError`.
+  diagnosis:
+    - "`kubectl logs <pod> --previous` to read the startup exception."
+    - "`kubectl describe pod` events for `CreateContainerConfigError` / missing secret."
+    - "Diff the Deployment env with the Secret keys."
+  diagnosis_commands: |
+    kubectl -n orders get pods -l app=orders-worker
+    kubectl -n orders logs deploy/orders-worker --previous | tail -20
+    kubectl -n orders get secret orders-db -o jsonpath='{.data}' | jq 'keys'
+  mitigation:
+    - "`kubectl rollout undo deploy/orders-worker` to restore the previous ReplicaSet."
+  permanent_fix:
+    - "Validate config at startup with a clear error message listing missing keys."
+    - "Use External Secrets / Azure Key Vault CSI driver with schema checks in CI."
+  config_example:
+    lang: yaml
+    code: |
+      env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: orders-db
+              key: DATABASE_URL
+  postmortem:
+    incident_id: INC-2025-0120
+    date: 2025-03-27
+    environment: production
+    duration_min: 26
+    impact: "Order processing paused for 26 minutes; backlog of 8k messages, no data loss."
+    detection: "Deployment rollout stuck alert."
+    timeline:
+      - "16:00 Secret rotation renames key to DB_URL."
+      - "16:04 New orders-worker pods CrashLoopBackOff with KeyError: 'DATABASE_URL'."
+      - "16:20 Rollout undone; old pods resume."
+    trigger: "Secret key rename not coordinated with the Deployment."
+    resolution: "Rollback, then aligned key names and added CI check."
+    action_items:
+      - "CI check that every secretKeyRef exists (owner: platform)."
+    lesson: "Read `--previous` logs first for CrashLoopBackOff; the answer is usually the last 10 lines."
+  kb:
+    title: "Pod stuck in CrashLoopBackOff - how do I see why it crashes?"
+    question: |
+      My pod shows CrashLoopBackOff and `kubectl logs` is empty. How do I debug it?
+    answer: |
+      CrashLoopBackOff is a symptom, not a cause. Use `kubectl logs <pod> --previous` to read the crashed
+      container's output, and `kubectl describe pod` for events and exit code. Common causes: missing env vars or
+      secrets, bad command, failing migrations, OOMKilled (137).
+    comment: "--previous was the missing piece for me, thanks."
+
+- id: image-pull-backoff
+  code: PLAT-IMAGEPULL
+  title: ImagePullBackOff - AKS cannot pull image from Azure Container Registry
+  service: orders-api
+  language: any
+  infrastructure: azure
+  error_type: ImagePullBackOff
+  severity: SEV3
+  error_codes:
+    - "ImagePullBackOff"
+    - "ErrImagePull"
+    - "401 Unauthorized"
+    - "manifest unknown"
+  tags: [kubernetes, acr, aks, registry, deployment]
+  log_excerpt: |
+    Warning  Failed     kubelet  Failed to pull image "contosoacr.azurecr.io/orders-api:1.42.0": rpc error: code = Unknown desc = failed to authorize: failed to fetch anonymous token: unexpected status: 401 Unauthorized
+    Warning  Failed     kubelet  Error: ErrImagePull
+    Normal   BackOff    kubelet  Back-off pulling image "contosoacr.azurecr.io/orders-api:1.42.0"
+  symptoms:
+    - "New pods stuck in ImagePullBackOff / ErrImagePull; old pods keep running."
+  root_cause: |
+    Either the tag doesn't exist (`manifest unknown`) or the AKS kubelet identity lost `AcrPull` on the
+    registry (`401 Unauthorized`) after the cluster was recreated.
+  diagnosis:
+    - "`kubectl describe pod` events show the exact pull error."
+    - "`az acr repository show-tags` to confirm the tag exists."
+    - "`az aks check-acr` to validate AKS-to-ACR auth."
+  diagnosis_commands: |
+    kubectl -n orders describe pod -l app=orders-api | grep -A3 Failed
+    az acr repository show-tags -n contosoacr --repository orders-api -o table
+    az aks check-acr -g rg-prod -n aks-prod --acr contosoacr.azurecr.io
+  mitigation:
+    - "Re-attach the registry: `az aks update -g rg-prod -n aks-prod --attach-acr contosoacr`."
+  permanent_fix:
+    - "Manage the AcrPull role assignment in Bicep/Terraform with the cluster."
+    - "Pin images by digest and verify the tag exists in CI before deploying."
+  config_example:
+    lang: bash
+    code: |
+      az aks update -g rg-prod -n aks-prod --attach-acr contosoacr
+  postmortem:
+    incident_id: INC-2025-0249
+    date: 2025-07-08
+    environment: staging
+    duration_min: 55
+    impact: "Staging deployments blocked for 55 minutes."
+    detection: "CD pipeline timeout."
+    timeline:
+      - "10:00 Staging cluster recreated from IaC without AcrPull assignment."
+      - "10:15 Deploy fails with 401 Unauthorized on image pull."
+      - "10:55 ACR attached; pods start."
+    trigger: "Missing AcrPull role assignment for the new kubelet identity."
+    resolution: "Added role assignment to Bicep."
+    action_items:
+      - "Add `az aks check-acr` to post-provision smoke tests (owner: platform)."
+    lesson: "Identity and role assignments are part of the infrastructure; codify them."
+  kb:
+    title: "AKS ImagePullBackOff '401 Unauthorized' from ACR"
+    question: |
+      Pods fail with `failed to fetch anonymous token: unexpected status: 401 Unauthorized` pulling from ACR.
+    answer: |
+      The kubelet managed identity lacks `AcrPull`. Run `az aks update --attach-acr <acr>` or assign the role in
+      IaC. `az aks check-acr` diagnoses it. If the error is `manifest unknown`, the tag doesn't exist.
+    comment: "check-acr is underrated."
+
+- id: liveness-probe-dependency
+  code: AUTH-LIVENESS-DEP
+  title: Cascading restarts because the liveness probe checks downstream dependencies
+  service: auth-service
+  language: python
+  infrastructure: kubernetes
+  error_type: ProbeFailure
+  severity: SEV1
+  error_codes:
+    - "Liveness probe failed: HTTP probe failed with statuscode: 503"
+    - "Container auth-service failed liveness probe, will be restarted"
+    - "Readiness probe failed"
+  tags: [kubernetes, probes, health-checks, cascading-failure]
+  log_excerpt: |
+    Warning  Unhealthy  kubelet  Liveness probe failed: HTTP probe failed with statuscode: 503
+    Normal   Killing    kubelet  Container auth-service failed liveness probe, will be restarted
+  symptoms:
+    - "All replicas restart at once when a dependency (DB/Redis) has a brief blip."
+    - "Outage lasts much longer than the dependency blip because pods are restarting and cold."
+  root_cause: |
+    The liveness probe called `/health`, which checked Postgres and Redis. A 30-second Redis failover made
+    every pod fail liveness; kubelet killed them all, turning a small blip into a full outage.
+  diagnosis:
+    - "Inspect probe config: `kubectl get deploy auth-service -o yaml | grep -A8 livenessProbe`."
+    - "Check whether the probed endpoint touches dependencies."
+  diagnosis_commands: |
+    kubectl -n auth get deploy auth-service -o yaml | grep -A8 -E 'livenessProbe|readinessProbe'
+    kubectl -n auth get events --field-selector reason=Unhealthy --sort-by=.lastTimestamp | tail
+  mitigation:
+    - "Point liveness at a dependency-free endpoint (`/healthz`) or relax failureThreshold."
+  permanent_fix:
+    - "Liveness = process alive (no dependency checks). Readiness = can serve traffic (checks DB/Redis) and only removes the pod from load balancing."
+    - "Add a startupProbe for slow starts instead of long initialDelaySeconds."
+  config_example:
+    lang: yaml
+    code: |
+      livenessProbe:
+        httpGet: {path: /healthz, port: 8080}
+        periodSeconds: 10
+        failureThreshold: 3
+      readinessProbe:
+        httpGet: {path: /readyz, port: 8080}
+        periodSeconds: 5
+  postmortem:
+    incident_id: INC-2025-0071
+    date: 2025-02-11
+    environment: production
+    duration_min: 12
+    impact: "Complete login outage for 12 minutes triggered by a 30-second Redis failover."
+    detection: "Availability SLO alert."
+    timeline:
+      - "07:30 Azure Cache for Redis planned failover (~30 s)."
+      - "07:31 All auth-service pods fail liveness (503) and are restarted simultaneously."
+      - "07:42 Pods back after cold start and DB connection storms."
+    trigger: "Liveness probe included dependency checks."
+    resolution: "Split /healthz (liveness) and /readyz (readiness)."
+    action_items:
+      - "Probe guidelines in the platform handbook (owner: SRE)."
+    lesson: "Liveness probes must never depend on other services."
+  kb:
+    title: "Should my Kubernetes liveness probe check the database?"
+    question: |
+      Is it a good idea for the liveness endpoint to verify the database connection?
+    answer: |
+      No. If the DB blips, all pods fail liveness and get restarted together, amplifying the outage. Check
+      dependencies in the readiness probe (pod is removed from Service endpoints but not killed).
+    comment: "Learned this the hard way during a DB failover."
+
+- id: jvm-heap-oom
+  code: RPT-JVM-HEAP
+  title: Java heap space OutOfMemoryError in reporting-service
+  service: reporting-service
+  language: java
+  infrastructure: kubernetes
+  error_type: OutOfMemoryError
+  severity: SEV3
+  error_codes:
+    - "java.lang.OutOfMemoryError: Java heap space"
+    - "GC overhead limit exceeded"
+    - "-XX:MaxRAMPercentage"
+  tags: [java, jvm, heap, memory, gc]
+  log_excerpt: |
+    Exception in thread "report-exec-3" java.lang.OutOfMemoryError: Java heap space
+        at java.base/java.util.Arrays.copyOf(Arrays.java:3537)
+        at com.contoso.reporting.ExportService.buildCsv(ExportService.java:88)
+  symptoms:
+    - "Java exception in logs (unlike OOMKilled, the JVM itself reports it); container usually keeps running."
+    - "Large report exports fail; GC pauses grow."
+  root_cause: |
+    The JVM max heap is smaller than what the export needs because it loads the whole result set into memory.
+    The container limit (2Gi) was not the constraint; the heap size (default 25% of RAM) was.
+  diagnosis:
+    - "Distinguish from container OOMKilled: here the JVM throws an exception and logs it; exit code is not 137."
+    - "Check heap flags: `java -XX:+PrintFlagsFinal -version | grep MaxHeapSize` inside the container."
+    - "Capture a heap dump with `-XX:+HeapDumpOnOutOfMemoryError`."
+  diagnosis_commands: |
+    kubectl -n reporting logs deploy/reporting-service --since=1h | grep -B2 -A5 OutOfMemoryError
+    kubectl -n reporting exec deploy/reporting-service -- java -XX:+PrintFlagsFinal -version | grep -E 'MaxHeapSize|MaxRAMPercentage'
+  mitigation:
+    - "Set `-XX:MaxRAMPercentage=75` so the heap scales with the container limit."
+  permanent_fix:
+    - "Stream exports (cursor + chunked CSV writer) instead of building them in memory."
+  config_example:
+    lang: yaml
+    code: |
+      env:
+        - name: JAVA_TOOL_OPTIONS
+          value: "-XX:MaxRAMPercentage=75 -XX:+HeapDumpOnOutOfMemoryError"
+  postmortem:
+    incident_id: INC-2025-0193
+    date: 2025-05-20
+    environment: production
+    duration_min: 300
+    impact: "Month-end exports failed for 5 hours for large clients."
+    detection: "Customer support tickets."
+    timeline:
+      - "09:00 Month-end export runs; OutOfMemoryError: Java heap space."
+      - "12:30 Heap found capped at 512 MB (25% of 2 GiB)."
+      - "14:00 MaxRAMPercentage=75 deployed; exports succeed."
+    trigger: "Default JVM heap sizing plus in-memory export."
+    resolution: "Heap flag, then streaming export."
+    action_items:
+      - "Streaming CSV export (owner: reporting)."
+    lesson: "Container memory limit != JVM heap; size the heap explicitly."
+  kb:
+    title: "Java heap space OOM in container even though the pod has 2Gi"
+    question: |
+      Why do I get `java.lang.OutOfMemoryError: Java heap space` when my pod limit is 2Gi and usage is 700Mi?
+    answer: |
+      The JVM's default max heap is 25% of container memory. Set `-XX:MaxRAMPercentage=70-75`. If the pod is
+      instead killed with exit 137, that is container OOMKilled, a different problem.
+    comment: "MaxRAMPercentage fixed it."

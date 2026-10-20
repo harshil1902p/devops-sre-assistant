@@ -9,6 +9,8 @@ dependencies = [
     "pydantic-settings>=2.6",
     "langchain-core>=0.3",
     "langchain-ollama>=0.2",
+    "httpx>=0.28.1",
+    "pyyaml>=6.0.3",
 ]
 
 [dependency-groups]
@@ -37,3 +39,7 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+# Markdown templates: line breaks inside them would change the rendered documents.
+"src/sre_assistant/corpus/generate.py" = ["E501"]

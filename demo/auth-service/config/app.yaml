@@ -1,0 +1,23 @@
+# auth-service runtime configuration (demo).
+# NOTE: values below are fake, demo-only credentials. They exist so Phase 3/5 can prove the
+# assistant reads config *safely* (secrets redacted before anything reaches an LLM).
+service:
+  name: auth-service
+  port: 8080
+  log_format: json
+
+database:
+  url: postgresql+psycopg://auth:REMOVED-DEMO-DB-PASSWORD@auth-db:5432/auth
+  pool_size: 5          # small on purpose; see post-mortem INC-2025-0142
+  max_overflow: 2
+  pool_timeout_seconds: 5
+  pool_pre_ping: true
+
+redis:
+  url: redis://auth-cache:6379/0
+  socket_timeout_seconds: 1.0
+  session_ttl_seconds: 3600
+
+security:
+  jwt_signing_key: REMOVED-DEMO-JWT-KEY
+  login_rate_limit_per_minute: 1000

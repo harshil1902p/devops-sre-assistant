@@ -1,0 +1,329 @@
+# Scenario catalogue: databases.
+# Each scenario renders into 1 runbook + 1 post-mortem + 1 KB thread (see scripts/generate_corpus.py).
+# Context: production runs on AKS (kubernetes); staging runs on Docker Compose.
+
+- id: db-pool-exhaustion
+  code: AUTH-DB-POOL
+  title: SQLAlchemy QueuePool exhaustion in auth-service
+  service: auth-service
+  language: python
+  infrastructure: kubernetes
+  error_type: TimeoutError
+  severity: SEV2
+  error_codes:
+    - "sqlalchemy.exc.TimeoutError"
+    - "QueuePool limit of size 5 overflow 2 reached, connection timed out"
+    - "sqlalche.me/e/20/3o7r"
+  tags: [postgres, sqlalchemy, connection-pool, database, latency]
+  log_excerpt: |
+    {"level": "ERROR", "service": "auth-service", "logger": "auth.api", "msg": "unhandled error on POST /login", "exc_type": "sqlalchemy.exc.TimeoutError", "exc_message": "QueuePool limit of size 5 overflow 2 reached, connection timed out, timeout 5.00 (Background on this error at: https://sqlalche.me/e/20/3o7r)"}
+    {"level": "WARNING", "service": "auth-service", "logger": "auth.access", "msg": "POST /login 500", "duration_ms": 5004.7}
+    {"level": "INFO", "service": "auth-service", "logger": "auth.runtime", "msg": "runtime stats (db pool: Pool size: 5  Connections in pool: 0 Current Overflow: 2 Current Checked out connections: 7)"}
+  symptoms:
+    - "`POST /login` returns HTTP 500 for a share of requests while others succeed."
+    - "Failed requests take almost exactly `pool_timeout` (5 s) before failing: the tell-tale sign of waiting for a pooled connection."
+    - "Runtime stats show `Checked out connections` = pool_size + max_overflow (7) and `Connections in pool: 0`."
+    - "Postgres itself is healthy: low CPU, `pg_isready` OK, far below `max_connections`."
+  root_cause: |
+    Every request needs a connection from SQLAlchemy's client-side `QueuePool`. The pool allows
+    `pool_size` (5) persistent connections plus `max_overflow` (2) temporary ones. When all 7 are checked out,
+    new requests wait `pool_timeout` seconds and then raise `sqlalchemy.exc.TimeoutError`.
+    Connections stay checked out because some code path holds them for a long time: slow queries, sessions
+    that are never closed, or long transactions wrapping remote calls. The database is not the
+    bottleneck; the **client pool** is.
+  diagnosis:
+    - "Confirm the error string is `QueuePool limit ... reached` (client-side). If you see `FATAL: sorry, too many clients already` instead, use runbook RB-PAY-PG-MAXCONN; that is the server-side limit."
+    - "Check pool gauges in the runtime stats log line: checked-out connections pinned at the limit confirms exhaustion."
+    - "Find what is holding connections: query `pg_stat_activity` for long-running or `idle in transaction` sessions from the service's user."
+    - "Correlate with recent deploys: new endpoints that open a session without a context manager, or added `pg_sleep`/heavy reports."
+  diagnosis_commands: |
+    # Live logs (staging / Docker)
+    docker logs sre-demo-auth-service-1 --since 10m | grep -E 'QueuePool|runtime stats'
+    # Production (AKS)
+    kubectl -n auth logs deploy/auth-service --since=10m | grep QueuePool
+    # Who is holding connections?
+    psql -U auth -d auth -c "SELECT pid, state, now()-query_start AS age, left(query,80)
+      FROM pg_stat_activity WHERE usename='auth' ORDER BY age DESC;"
+  mitigation:
+    - "Terminate the offending long-running sessions: `SELECT pg_terminate_backend(pid)` for queries older than a few seconds."
+    - "Restart the pods/containers to release leaked connections (temporary relief only)."
+    - "Scale out replicas only if Postgres `max_connections` has headroom: each replica adds pool_size + max_overflow connections."
+  permanent_fix:
+    - "Increase `pool_size` to 20 and `max_overflow` to 10 in `app/database.py` (or the `DB_POOL_SIZE` / `DB_MAX_OVERFLOW` env vars). Budget: replicas x (pool_size + max_overflow) must stay below Postgres `max_connections` minus a reserve."
+    - "Always use `with SessionLocal() as db:` so sessions are returned to the pool, including on exceptions."
+    - "Set a server-side `statement_timeout` (e.g., 3s) for the service role so one slow query cannot pin a connection forever."
+    - "Alert on pool saturation (checked-out / capacity > 80% for 2 min), not just on 5xx."
+  config_example:
+    lang: python
+    code: |
+      # app/database.py
+      engine = create_engine(
+          DATABASE_URL,
+          pool_size=20,          # was 5
+          max_overflow=10,       # was 2
+          pool_timeout=5,
+          pool_pre_ping=True,
+          connect_args={"options": "-c statement_timeout=3000"},
+      )
+  postmortem:
+    incident_id: INC-2025-0142
+    date: 2025-04-12
+    environment: production
+    duration_min: 47
+    impact: "18% of logins failed with HTTP 500 for 47 minutes during the Saturday peak; ~4,100 users affected."
+    detection: "PagerDuty alert on auth-service 5xx rate > 5% for 5 minutes."
+    timeline:
+      - "14:02 Deploy of auth-service v2.31 adds the /login audit-report query."
+      - "14:09 5xx alert fires; on-call sees `QueuePool limit of size 5 overflow 2 reached` in logs."
+      - "14:21 Postgres confirmed healthy (12% CPU, 40/200 connections), so the problem is client-side."
+      - "14:35 pg_stat_activity shows audit-report queries running 20-30 s each, holding pooled connections."
+      - "14:44 Rollback to v2.30; pool recovers within 1 minute."
+      - "14:49 Error rate back to baseline; incident resolved."
+    trigger: "A new synchronous audit-report query ran inside the login request and held a pooled connection for 20-30 seconds."
+    resolution: "Rolled back v2.31. Follow-up: increased pool_size to 20 and max_overflow to 10 in database.py, moved the audit report to an async worker, and set statement_timeout=3s."
+    action_items:
+      - "Raise pool_size to 20 / max_overflow to 10 and document the connection budget (owner: auth team)."
+      - "Add pool saturation metric + alert (owner: SRE)."
+      - "Add statement_timeout for the auth role (owner: DBA)."
+      - "Load-test new queries on the login path before release (owner: QA)."
+    lesson: "When requests fail after exactly pool_timeout seconds and the database looks idle, the bottleneck is the client connection pool, not Postgres."
+  kb:
+    title: "sqlalchemy.exc.TimeoutError: QueuePool limit of size 5 overflow 10 reached - but Postgres is idle?"
+    question: |
+      Our FastAPI service randomly returns 500s under load with:
+
+      ```
+      sqlalchemy.exc.TimeoutError: QueuePool limit of size 5 overflow 10 reached, connection timed out, timeout 30.00
+      ```
+
+      Postgres CPU is at 10% and `max_connections` is 100, so the DB is clearly not overloaded. Why does this happen?
+    answer: |
+      The limit in that message is SQLAlchemy's **client-side** pool, not Postgres. All `pool_size + max_overflow`
+      connections are checked out, so new requests wait `pool_timeout` and give up.
+
+      Usual causes:
+      1. Sessions not closed: use `with Session() as s:` or FastAPI dependencies with `yield`.
+      2. Long transactions or slow queries holding connections (check `pg_stat_activity`).
+      3. Pool simply too small for your concurrency: raise `pool_size` (e.g., 20) but keep
+         `replicas * (pool_size + max_overflow) < max_connections`.
+
+      Also set `statement_timeout` so a single slow query cannot hold a connection forever.
+    comment: "We had a background thread calling `session = Session()` without closing it. Switching to a context manager fixed it."
+
+- id: pg-too-many-connections
+  code: PAY-PG-MAXCONN
+  title: Postgres rejects connections with 'too many clients already'
+  service: payments-api
+  language: python
+  infrastructure: kubernetes
+  error_type: OperationalError
+  severity: SEV1
+  error_codes:
+    - "FATAL: sorry, too many clients already"
+    - "psycopg.OperationalError"
+    - "remaining connection slots are reserved for non-replication superuser connections"
+  tags: [postgres, max_connections, pgbouncer, database, autoscaling]
+  log_excerpt: |
+    psycopg.OperationalError: connection failed: connection to server at "10.0.4.12", port 5432 failed: FATAL:  sorry, too many clients already
+    psycopg.OperationalError: connection failed: FATAL:  remaining connection slots are reserved for non-replication superuser connections
+    2025-06-03 09:14:55 UTC [3121]: FATAL:  sorry, too many clients already
+  symptoms:
+    - "New connections fail immediately (no waiting), unlike client-pool timeouts."
+    - "Postgres server log shows `FATAL: sorry, too many clients already`."
+    - "Usually coincides with a horizontal scale-out (HPA added pods) or a new service sharing the database."
+  root_cause: |
+    Postgres has a hard server-side limit, `max_connections`. Every application replica opens up to
+    `pool_size + max_overflow` connections, so total demand is `replicas x (pool_size + max_overflow)` plus
+    cron jobs and admin tools. When the HPA scaled payments-api from 6 to 20 pods, demand exceeded
+    `max_connections=200` and Postgres refused new clients.
+  diagnosis:
+    - "Count connections per application: `SELECT usename, application_name, count(*) FROM pg_stat_activity GROUP BY 1,2`."
+    - "Compare with `SHOW max_connections;` and the HPA replica count (`kubectl get hpa -n payments`)."
+    - "Distinguish from client pool exhaustion: this error comes from the server and fails fast."
+  diagnosis_commands: |
+    kubectl -n payments get hpa payments-api
+    psql -c "SHOW max_connections;"
+    psql -c "SELECT usename, application_name, state, count(*) FROM pg_stat_activity GROUP BY 1,2,3 ORDER BY 4 DESC;"
+  mitigation:
+    - "Cap the HPA `maxReplicas` temporarily to bring connection demand under the limit."
+    - "Kill idle connections: `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE state='idle' AND now()-state_change > interval '5 min'`."
+  permanent_fix:
+    - "Put PgBouncer in transaction-pooling mode in front of Postgres so thousands of client connections share ~50 server connections."
+    - "Reduce per-pod pool size (pool_size=5, max_overflow=0) when running behind PgBouncer."
+    - "Document a connection budget per service and alert at 80% of max_connections."
+  config_example:
+    lang: ini
+    code: |
+      ; pgbouncer.ini
+      [pgbouncer]
+      pool_mode = transaction
+      max_client_conn = 2000
+      default_pool_size = 50
+      reserve_pool_size = 10
+  postmortem:
+    incident_id: INC-2025-0211
+    date: 2025-06-03
+    environment: production
+    duration_min: 22
+    impact: "Card payments failed for 22 minutes during a marketing campaign; 2,300 failed checkouts."
+    detection: "Synthetic checkout probe failed; Postgres log alert on FATAL errors."
+    timeline:
+      - "09:05 Campaign traffic starts; HPA scales payments-api 6 -> 20 pods."
+      - "09:12 `FATAL: sorry, too many clients already` in Postgres logs."
+      - "09:19 On-call caps HPA at 8 replicas; terminates idle sessions."
+      - "09:27 Checkout success rate recovers."
+    trigger: "Autoscaling multiplied per-pod connection pools beyond Postgres max_connections=200."
+    resolution: "Capped replicas, then deployed PgBouncer in transaction mode and reduced per-pod pools."
+    action_items:
+      - "Deploy PgBouncer for payments-db (owner: platform)."
+      - "Add connection-budget check to the HPA review checklist (owner: SRE)."
+    lesson: "Horizontal scaling of stateless pods is not free: each replica multiplies database connections."
+  kb:
+    title: "Postgres 'FATAL: sorry, too many clients already' after Kubernetes autoscaling"
+    question: |
+      After enabling HPA on our Django API we started getting
+      `FATAL: sorry, too many clients already`. Should I just raise max_connections to 1000?
+    answer: |
+      Raising `max_connections` far is risky: each Postgres connection is a process using several MB of RAM
+      and contention grows. The standard fix is a **connection pooler** (PgBouncer, or the built-in pooler of
+      managed services such as Azure Database for PostgreSQL Flexible Server) in transaction mode, plus
+      smaller per-pod pools. Always calculate `replicas x pool size` against the server limit.
+    comment: "Azure Flexible Server has PgBouncer built in; enabling it took 5 minutes."
+
+- id: pg-deadlock
+  code: PAY-PG-DEADLOCK
+  title: Postgres deadlocks between concurrent payment transactions
+  service: payments-api
+  language: python
+  infrastructure: kubernetes
+  error_type: DeadlockDetected
+  severity: SEV3
+  error_codes:
+    - "psycopg.errors.DeadlockDetected: deadlock detected"
+    - "Process 4121 waits for ShareLock on transaction"
+    - "40P01"
+  tags: [postgres, locking, transactions, database]
+  log_excerpt: |
+    psycopg.errors.DeadlockDetected: deadlock detected
+    DETAIL:  Process 4121 waits for ShareLock on transaction 99812; blocked by process 4188.
+    Process 4188 waits for ShareLock on transaction 99807; blocked by process 4121.
+    HINT:  See server log for query details.
+    CONTEXT:  while updating tuple (12,7) in relation "accounts"
+  symptoms:
+    - "Intermittent 500s on transfer endpoints with SQLSTATE 40P01."
+    - "Only under concurrent traffic touching the same pair of rows."
+  root_cause: |
+    Two transactions lock the same rows in opposite order (A then B vs B then A). Postgres detects the
+    cycle after `deadlock_timeout` and aborts one transaction.
+  diagnosis:
+    - "Read the DETAIL lines: they name both processes and the relation."
+    - "Enable `log_lock_waits = on` to see waits before they become deadlocks."
+    - "Review code paths that update multiple rows in one transaction."
+  diagnosis_commands: |
+    kubectl -n payments logs deploy/payments-api --since=30m | grep -A4 'deadlock detected'
+    psql -c "SELECT pid, wait_event_type, wait_event, left(query,80) FROM pg_stat_activity WHERE wait_event_type='Lock';"
+  mitigation:
+    - "Retry the aborted transaction (40P01 is safe to retry) with jittered backoff."
+  permanent_fix:
+    - "Always lock rows in a deterministic order, e.g., `SELECT ... FOR UPDATE ORDER BY id`."
+    - "Keep transactions short; never call external services inside a transaction."
+  config_example:
+    lang: python
+    code: |
+      ids = sorted([from_id, to_id])
+      rows = db.execute(text("SELECT id, balance FROM accounts WHERE id = ANY(:ids) ORDER BY id FOR UPDATE"), {"ids": ids})
+  postmortem:
+    incident_id: INC-2025-0187
+    date: 2025-05-14
+    environment: production
+    duration_min: 95
+    impact: "0.7% of internal transfers failed and had to be retried manually."
+    detection: "Error-budget burn alert on the transfers endpoint."
+    timeline:
+      - "10:10 Spike of 40P01 errors after a batch reconciliation job starts."
+      - "10:40 Team identifies opposite lock ordering between the job and the API."
+      - "11:45 Hotfix adds ordered locking; errors stop."
+    trigger: "Reconciliation job updated accounts in descending id order while the API used ascending order."
+    resolution: "Deterministic lock ordering in both code paths plus retry on 40P01."
+    action_items:
+      - "Add retry decorator for serialization/deadlock errors (owner: payments)."
+    lesson: "Deadlocks are a design bug in lock ordering, not a capacity problem."
+  kb:
+    title: "How do I fix 'deadlock detected' (SQLSTATE 40P01) in Postgres?"
+    question: |
+      Our transfer endpoint sometimes fails with `psycopg.errors.DeadlockDetected: deadlock detected`.
+      Should we increase deadlock_timeout?
+    answer: |
+      No. `deadlock_timeout` only controls how soon Postgres checks for deadlocks. Fix the ordering: lock rows in
+      a consistent order (`ORDER BY id FOR UPDATE`), keep transactions short, and retry 40P01 errors.
+    comment: "Sorting the ids before locking eliminated them completely for us."
+
+- id: disk-full
+  code: ORD-DISK-FULL
+  title: Disk full on database volume - 'No space left on device'
+  service: orders-db
+  language: sql
+  infrastructure: kubernetes
+  error_type: DiskFull
+  severity: SEV1
+  error_codes:
+    - "No space left on device"
+    - "could not extend file"
+    - "ENOSPC"
+    - "PANIC: could not write to file \"pg_wal/xlogtemp\""
+  tags: [postgres, storage, pvc, wal, disk]
+  log_excerpt: |
+    ERROR:  could not extend file "base/16384/24576": No space left on device
+    HINT:  Check free disk space.
+    PANIC:  could not write to file "pg_wal/xlogtemp.212": No space left on device
+    LOG:  database system is shut down
+  symptoms:
+    - "All writes fail; Postgres may crash and refuse to restart."
+    - "PVC usage at 100% in `kubectl exec ... df -h`."
+  root_cause: |
+    WAL files accumulated because an inactive replication slot (from a decommissioned read replica / CDC
+    connector) prevented WAL recycling, filling the 100 GiB persistent volume.
+  diagnosis:
+    - "Check volume usage: `df -h /var/lib/postgresql/data`."
+    - "Check WAL directory size and replication slots: `SELECT slot_name, active, pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)) FROM pg_replication_slots;`."
+  diagnosis_commands: |
+    kubectl -n orders exec orders-db-0 -- df -h /var/lib/postgresql/data
+    kubectl -n orders exec orders-db-0 -- du -sh /var/lib/postgresql/data/pg_wal
+    psql -c "SELECT slot_name, active FROM pg_replication_slots;"
+  mitigation:
+    - "Expand the PVC (StorageClass must have `allowVolumeExpansion: true`): `kubectl patch pvc data-orders-db-0 -p '{\"spec\":{\"resources\":{\"requests\":{\"storage\":\"200Gi\"}}}}'`."
+    - "Drop the inactive replication slot: `SELECT pg_drop_replication_slot('old_cdc_slot');`. Never delete WAL files by hand."
+  permanent_fix:
+    - "Alert on disk usage > 80% and on inactive replication slots."
+    - "Set `max_slot_wal_keep_size` to bound WAL retention."
+  config_example:
+    lang: ini
+    code: |
+      # postgresql.conf
+      max_slot_wal_keep_size = 20GB
+  postmortem:
+    incident_id: INC-2025-0098
+    date: 2025-03-02
+    environment: production
+    duration_min: 64
+    impact: "Order placement unavailable for 64 minutes."
+    detection: "orders-api 5xx alert; Postgres pod in CrashLoopBackOff."
+    timeline:
+      - "02:11 Disk reaches 100%; Postgres PANIC on WAL write."
+      - "02:30 On-call finds pg_wal at 78 GiB and an inactive CDC replication slot."
+      - "02:52 PVC expanded to 200Gi; slot dropped; Postgres restarts."
+      - "03:15 Service recovered."
+    trigger: "Decommissioned CDC connector left an inactive replication slot retaining WAL."
+    resolution: "Expanded volume, dropped slot, configured max_slot_wal_keep_size."
+    action_items:
+      - "Disk usage alert at 80% (owner: SRE)."
+      - "Decommission checklist must include replication slots (owner: data platform)."
+    lesson: "Inactive replication slots silently retain WAL until the disk fills."
+  kb:
+    title: "Postgres pg_wal folder keeps growing until 'No space left on device'"
+    question: |
+      Our pg_wal directory is 80 GB and the volume is full. Checkpoints run fine. Can I just delete old WAL files?
+    answer: |
+      Never delete WAL by hand; you can corrupt the cluster. WAL is retained by replication slots, `wal_keep_size`,
+      or failing archiving. Check `pg_replication_slots` for inactive slots and drop them, and fix `archive_command` if failing.
+    comment: "It was a Debezium slot from a connector we deleted months ago."

@@ -1,0 +1,219 @@
+# Scenario catalogue: caches and messaging.
+
+- id: redis-timeout
+  code: AUTH-REDIS-TIMEOUT
+  title: Redis socket timeouts in auth-service caused by a blocked Redis
+  service: auth-service
+  language: python
+  infrastructure: kubernetes
+  error_type: TimeoutError
+  severity: SEV2
+  error_codes:
+    - "redis.exceptions.TimeoutError: Timeout reading from socket"
+    - "redis.exceptions.TimeoutError"
+    - "Timeout reading from socket"
+  tags: [redis, cache, latency, slowlog, sessions]
+  log_excerpt: |
+    {"level": "ERROR", "service": "auth-service", "logger": "auth.api", "msg": "unhandled error on POST /login", "exc_type": "redis.exceptions.TimeoutError", "exc_message": "Timeout reading from socket"}
+    {"level": "WARNING", "service": "auth-service", "logger": "auth.access", "msg": "POST /login 500", "duration_ms": 1003.2}
+  symptoms:
+    - "Login returns 500 after ~1 s (the configured `socket_timeout`)."
+    - "Redis is reachable (no connection refused) and `PING` eventually answers, but slowly."
+    - "Redis `SLOWLOG` shows a long-running command, or `CLIENT PAUSE` / a large `KEYS *` was executed."
+  root_cause: |
+    Redis is single-threaded for commands. One expensive command (`KEYS *` on millions of keys, a big
+    `DEL` of a huge set, a Lua script, or a `CLIENT PAUSE` during a failover) blocks every other client. The
+    auth-service rate-limiter and session writes then exceed the 1 s `socket_timeout` and raise
+    `redis.exceptions.TimeoutError`. The connection is fine; the server is busy.
+  diagnosis:
+    - "Differentiate from Redis being down: `ConnectionError` / `ECONNREFUSED` means unreachable (see RB-NOTIF-REDIS-REFUSED); `TimeoutError: Timeout reading from socket` means connected but not answering in time."
+    - "Check `redis-cli SLOWLOG GET 10` for long commands and `redis-cli INFO commandstats`."
+    - "Check `redis-cli --latency` and `INFO clients` (blocked_clients)."
+    - "Look for a recent cron/maintenance job or admin running `KEYS *`."
+  diagnosis_commands: |
+    docker exec sre-demo-auth-cache-1 redis-cli SLOWLOG GET 10
+    docker exec sre-demo-auth-cache-1 redis-cli INFO clients | grep -E 'blocked|connected'
+    kubectl -n auth exec deploy/auth-cache -- redis-cli --latency -i 1
+  mitigation:
+    - "Stop the offending client/job; `CLIENT KILL` it if necessary."
+    - "If Redis is paused for failover, wait for the pause to end (seconds) and verify recovery."
+  permanent_fix:
+    - "Replace `KEYS` with incremental `SCAN`; use `UNLINK` instead of `DEL` for big keys."
+    - "Make the rate limiter fail-open: if Redis times out, allow the login rather than returning 500."
+    - "Add a circuit breaker and keep `socket_timeout` small (0.5-1 s) so the API degrades quickly."
+    - "Rename/disable dangerous commands in production (`rename-command KEYS \"\"`)."
+  config_example:
+    lang: python
+    code: |
+      try:
+          attempts = cache.incr(attempts_key)
+      except redis.exceptions.TimeoutError:
+          log.warning("rate limiter unavailable, failing open")
+          attempts = 0
+  postmortem:
+    incident_id: INC-2025-0156
+    date: 2025-04-28
+    environment: production
+    duration_min: 18
+    impact: "Logins failed intermittently for 18 minutes; 9% error rate."
+    detection: "auth-service 5xx alert and Redis latency alert."
+    timeline:
+      - "11:00 Analytics cron job runs `KEYS session:*` against production Redis (2.1M keys)."
+      - "11:01 auth-service logs `redis.exceptions.TimeoutError: Timeout reading from socket`."
+      - "11:09 SLOWLOG reveals KEYS taking 1.8 s per call, repeated every few seconds."
+      - "11:17 Cron job disabled; latency returns to < 1 ms."
+    trigger: "A cron job used KEYS instead of SCAN on a large production keyspace."
+    resolution: "Disabled the job, rewrote it with SCAN, renamed KEYS in production config, made the rate limiter fail-open."
+    action_items:
+      - "Rename KEYS/FLUSHALL in production Redis (owner: platform)."
+      - "Fail-open rate limiter (owner: auth team)."
+    lesson: "One O(N) command can stall a single-threaded Redis for every client."
+  kb:
+    title: "redis-py 'TimeoutError: Timeout reading from socket' but Redis is up"
+    question: |
+      Our Python API logs `redis.exceptions.TimeoutError: Timeout reading from socket` a few times an hour.
+      `redis-cli ping` works. Network looks fine. What is going on?
+    answer: |
+      The client connected but didn't get a reply within `socket_timeout`. Usually Redis was **blocked** by
+      a slow command (KEYS, big DEL, Lua) or by persistence forks on a memory-constrained host. Check
+      `SLOWLOG GET` and `INFO persistence` (`latest_fork_usec`). Use SCAN/UNLINK and make cache calls fail-safe.
+    comment: "Our culprit was BGSAVE forking a 12 GB instance; moving to AOF on a replica fixed it."
+
+- id: redis-connection-refused
+  code: NOTIF-REDIS-REFUSED
+  title: notification-service cannot connect to Redis - ECONNREFUSED
+  service: notification-service
+  language: node
+  infrastructure: kubernetes
+  error_type: ConnectionRefused
+  severity: SEV2
+  error_codes:
+    - "Error: connect ECONNREFUSED 10.0.3.15:6379"
+    - "ECONNREFUSED"
+    - "redis.exceptions.ConnectionError: Error 111 connecting"
+  tags: [redis, node, ioredis, failover, network]
+  log_excerpt: |
+    [ioredis] Unhandled error event: Error: connect ECONNREFUSED 10.0.3.15:6379
+        at TCPConnectWrapper.afterConnect [as oncomplete] (node:net:1555:16)
+    {"level":"error","service":"notification-service","msg":"queue publish failed","err":"Connection is closed."}
+  symptoms:
+    - "Errors start instantly (no timeout wait) with ECONNREFUSED."
+    - "Redis pod restarted, was rescheduled, or its Service has no endpoints."
+  root_cause: |
+    Nothing is listening on the target IP/port: Redis pod was OOMKilled and restarting, or the client
+    hard-coded a pod IP that changed after rescheduling instead of using the Service DNS name.
+  diagnosis:
+    - "`kubectl get endpoints redis -n notif`: empty endpoints means no ready Redis pod."
+    - "Check whether the configured host is a pod IP (bad) or service DNS (good)."
+    - "`kubectl describe pod` on Redis for restarts / OOMKilled."
+  diagnosis_commands: |
+    kubectl -n notif get endpoints redis
+    kubectl -n notif describe pod -l app=redis | grep -A5 'Last State'
+    kubectl -n notif get configmap notification-config -o yaml | grep REDIS
+  mitigation:
+    - "Point clients at the Service DNS name `redis.notif.svc.cluster.local`."
+    - "Restart Redis if crashed; investigate its own OOM/restart reason."
+  permanent_fix:
+    - "Use a managed Redis (Azure Cache for Redis) with replicas or Redis Sentinel."
+    - "Configure ioredis `retryStrategy` with backoff and a bounded offline queue."
+  config_example:
+    lang: javascript
+    code: |
+      const redis = new Redis({
+        host: "redis.notif.svc.cluster.local",
+        retryStrategy: (times) => Math.min(times * 200, 2000),
+        maxRetriesPerRequest: 3,
+      });
+  postmortem:
+    incident_id: INC-2025-0233
+    date: 2025-06-21
+    environment: production
+    duration_min: 31
+    impact: "Push notifications delayed by up to 31 minutes."
+    detection: "Queue-depth alert on notifications."
+    timeline:
+      - "08:02 Node pool upgrade reschedules the Redis pod to a new IP."
+      - "08:03 notification-service logs `connect ECONNREFUSED 10.0.3.15:6379`."
+      - "08:25 Engineer finds REDIS_HOST set to the old pod IP in a ConfigMap."
+      - "08:33 ConfigMap updated to service DNS; pods restarted; backlog drains."
+    trigger: "Client configured with a pod IP instead of the Kubernetes Service name."
+    resolution: "Use Service DNS; add retryStrategy."
+    action_items:
+      - "Lint ConfigMaps for raw pod IPs (owner: platform)."
+    lesson: "Pod IPs are ephemeral; always address workloads through Services."
+  kb:
+    title: "ioredis 'connect ECONNREFUSED' after Kubernetes node upgrade"
+    question: |
+      After our AKS node upgrade, the Node app logs `Error: connect ECONNREFUSED 10.0.3.15:6379`.
+      Redis is running fine. Why?
+    answer: |
+      ECONNREFUSED means nothing listens at that IP:port. Your Redis pod likely got a new IP. Use the Service
+      DNS name, never pod IPs. Check `kubectl get endpoints` to see the current backing IPs.
+    comment: "Exactly this. Someone copied the pod IP into the ConfigMap during debugging."
+
+- id: kafka-rebalance
+  code: ORD-KAFKA-REBALANCE
+  title: Kafka consumer group rebalance storm - CommitFailedError
+  service: orders-worker
+  language: python
+  infrastructure: kubernetes
+  error_type: CommitFailedError
+  severity: SEV3
+  error_codes:
+    - "CommitFailedError: Commit cannot be completed since the group has already rebalanced"
+    - "max.poll.interval.ms"
+    - "consumer lag"
+  tags: [kafka, consumer-lag, rebalance, messaging]
+  log_excerpt: |
+    kafka.errors.CommitFailedError: CommitFailedError: Commit cannot be completed since the group has already
+    rebalanced and assigned the partitions to another member. This means that the time between subsequent calls
+    to poll() was longer than the configured max_poll_interval_ms
+    WARNING Heartbeat failed for group orders-worker because it is rebalancing
+  symptoms:
+    - "Consumer lag grows continuously; same messages processed more than once."
+    - "Frequent `rebalancing` logs."
+  root_cause: |
+    A batch took longer to process than `max.poll.interval.ms` (default 300 s), so the broker evicted the
+    consumer and reassigned partitions. The slow consumer's commit then failed, the batch was redelivered,
+    and the cycle repeated.
+  diagnosis:
+    - "Measure per-batch processing time vs `max_poll_interval_ms`."
+    - "Check lag: `kafka-consumer-groups --describe --group orders-worker`."
+  diagnosis_commands: |
+    kafka-consumer-groups --bootstrap-server kafka:9092 --describe --group orders-worker
+    kubectl -n orders logs deploy/orders-worker --since=15m | grep -E 'rebalanc|CommitFailed'
+  mitigation:
+    - "Reduce `max_poll_records` so each batch finishes well within the poll interval."
+  permanent_fix:
+    - "Make handlers idempotent (dedupe on message key) because redelivery will happen."
+    - "Move slow I/O out of the poll loop or increase `max_poll_interval_ms` deliberately."
+  config_example:
+    lang: python
+    code: |
+      consumer = KafkaConsumer("orders", group_id="orders-worker",
+                               max_poll_records=50, max_poll_interval_ms=600_000, enable_auto_commit=False)
+  postmortem:
+    incident_id: INC-2025-0175
+    date: 2025-05-06
+    environment: production
+    duration_min: 140
+    impact: "Order confirmation emails delayed up to 2 hours; 300 duplicate emails sent."
+    detection: "Consumer lag alert > 50k messages."
+    timeline:
+      - "13:00 New PDF invoice generation added to the order handler (~3 s per message)."
+      - "13:20 Lag climbs; logs show CommitFailedError and rebalances."
+      - "15:20 max_poll_records reduced to 50 and handler made idempotent; lag drains."
+    trigger: "Slow handler made batches exceed max.poll.interval.ms."
+    resolution: "Smaller batches, idempotent handler, invoice generation moved to its own queue."
+    action_items:
+      - "Lag-based autoscaling with KEDA (owner: platform)."
+    lesson: "Consumers must poll regularly; slow work belongs in its own queue."
+  kb:
+    title: "Kafka CommitFailedError: group has already rebalanced - how to fix?"
+    question: |
+      Python kafka consumer keeps failing commits with
+      `CommitFailedError: Commit cannot be completed since the group has already rebalanced`.
+    answer: |
+      Your processing loop exceeds `max_poll_interval_ms`. Lower `max_poll_records`, speed up processing,
+      or raise the interval. Make processing idempotent since messages will be redelivered.
+    comment: "Lowering max_poll_records from 500 to 50 fixed it immediately."

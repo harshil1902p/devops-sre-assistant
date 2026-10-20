@@ -1,0 +1,317 @@
+# Scenario catalogue: networking, gateways, certificates, external APIs.
+
+- id: gateway-504
+  code: GW-504-UPSTREAM-TIMEOUT
+  title: 504 Gateway Timeout from api-gateway - upstream timed out
+  service: api-gateway
+  language: nginx
+  infrastructure: kubernetes
+  error_type: GatewayTimeout
+  severity: SEV2
+  error_codes:
+    - "504 Gateway Timeout"
+    - "upstream timed out (110: Connection timed out) while reading response header from upstream"
+    - "proxy_read_timeout"
+  tags: [nginx, ingress, timeout, latency, gateway]
+  log_excerpt: |
+    2025/06/12 13:44:02 [error] 31#31: *88213 upstream timed out (110: Connection timed out) while reading response header from upstream, client: 10.0.1.4, server: api.contoso.com, request: "GET /v1/reports/annual HTTP/1.1", upstream: "http://10.0.5.21:8080/v1/reports/annual"
+    10.0.1.4 - - [12/Jun/2025:13:44:02 +0000] "GET /v1/reports/annual HTTP/1.1" 504 160 "-" "Mozilla/5.0"
+  symptoms:
+    - "Clients get 504 after exactly `proxy_read_timeout` (60 s default)."
+    - "Only specific slow endpoints affected; upstream pods healthy."
+  root_cause: |
+    The upstream took longer than the gateway's `proxy_read_timeout` to start responding. The gateway gave up
+    and returned 504 while the upstream kept working (wasting resources).
+  diagnosis:
+    - "Find which upstream path: the nginx error log line includes `request` and `upstream`."
+    - "Check upstream latency (p99) for that endpoint; look for slow queries."
+    - "Compare 504 (upstream too slow) with 502 (upstream refused/closed connection; see RB-GW-502-UPSTREAM-REFUSED)."
+  diagnosis_commands: |
+    kubectl -n ingress logs deploy/ingress-nginx-controller --since=15m | grep 'upstream timed out'
+    kubectl -n reports logs deploy/reports-api --since=15m | grep -E 'duration_ms|slow'
+  mitigation:
+    - "Raise timeout for that route only via ingress annotation, as a stopgap."
+  permanent_fix:
+    - "Make long operations asynchronous (202 Accepted + polling/job id)."
+    - "Fix the slow query; add upstream timeouts shorter than the gateway's."
+  config_example:
+    lang: yaml
+    code: |
+      metadata:
+        annotations:
+          nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+  postmortem:
+    incident_id: INC-2025-0219
+    date: 2025-06-12
+    environment: production
+    duration_min: 75
+    impact: "Annual report downloads failed with 504 for 75 minutes."
+    detection: "Gateway 5xx alert."
+    timeline:
+      - "13:30 Reports table grows past an index threshold; query plan changes."
+      - "13:44 504s from the gateway with `upstream timed out`."
+      - "14:45 Index added; latency back to 3 s."
+    trigger: "Missing index after data growth made the report query take 90 s."
+    resolution: "Added index; converted report to async job."
+    action_items:
+      - "Async report generation (owner: reports)."
+    lesson: "504 means the upstream is slow; fix the latency, don't just raise timeouts."
+  kb:
+    title: "nginx 'upstream timed out (110: Connection timed out) while reading response header'"
+    question: |
+      My ingress returns 504 for one endpoint. Logs say upstream timed out. Should I increase proxy_read_timeout?
+    answer: |
+      Only as a temporary measure. The upstream is too slow. Profile the endpoint, fix the query, or make it async.
+    comment: "Async + job polling solved it for us."
+
+- id: gateway-502
+  code: GW-502-UPSTREAM-REFUSED
+  title: 502 Bad Gateway during deploys - upstream connection refused
+  service: api-gateway
+  language: nginx
+  infrastructure: kubernetes
+  error_type: BadGateway
+  severity: SEV3
+  error_codes:
+    - "502 Bad Gateway"
+    - "connect() failed (111: Connection refused) while connecting to upstream"
+    - "upstream prematurely closed connection"
+  tags: [nginx, ingress, deployment, readiness, graceful-shutdown]
+  log_excerpt: |
+    2025/07/01 10:02:13 [error] 29#29: *1201 connect() failed (111: Connection refused) while connecting to upstream, upstream: "http://10.0.5.33:8080/v1/orders"
+    10.0.1.9 - - [01/Jul/2025:10:02:13 +0000] "POST /v1/orders HTTP/1.1" 502 150
+  symptoms:
+    - "Bursts of 502 only during rolling deployments."
+  root_cause: |
+    Pods were removed from endpoints after they had already stopped accepting connections (no preStop
+    delay), and new pods were marked Ready before the app listened (readiness probe hitting a static path).
+  diagnosis:
+    - "Correlate 502 timestamps with rollout events."
+    - "Check readinessProbe and preStop hook / terminationGracePeriodSeconds."
+  diagnosis_commands: |
+    kubectl -n orders rollout history deploy/orders-api
+    kubectl -n orders get deploy orders-api -o yaml | grep -A6 -E 'preStop|readinessProbe'
+  mitigation:
+    - "Pause rollouts; scale up to reduce per-pod impact."
+  permanent_fix:
+    - "Add `preStop: sleep 10` so endpoints are removed before shutdown; handle SIGTERM gracefully."
+    - "Readiness probe must hit an endpoint that requires the app to be fully started."
+  config_example:
+    lang: yaml
+    code: |
+      lifecycle:
+        preStop:
+          exec: {command: ["sleep", "10"]}
+      terminationGracePeriodSeconds: 30
+  postmortem:
+    incident_id: INC-2025-0241
+    date: 2025-07-01
+    environment: production
+    duration_min: 8
+    impact: "2% of order submissions failed with 502 during each deploy."
+    detection: "Deploy-correlated 5xx dashboard."
+    timeline:
+      - "10:00 Rolling deploy of orders-api."
+      - "10:02 502 burst with connection refused."
+      - "10:08 Rollout completes; errors stop."
+    trigger: "No preStop delay; endpoints removed after pods stopped listening."
+    resolution: "preStop sleep and graceful SIGTERM handling."
+    action_items:
+      - "Default preStop in the Helm chart (owner: platform)."
+    lesson: "Zero-downtime deploys require coordinated readiness and graceful shutdown."
+  kb:
+    title: "Kubernetes rolling update causes 502 Bad Gateway for a few seconds"
+    question: |
+      Every deploy we see a handful of 502s from ingress-nginx with `connect() failed (111: Connection refused)`.
+    answer: |
+      Endpoint removal is asynchronous; add a preStop sleep (5-15 s), handle SIGTERM, and ensure readiness checks
+      reflect real readiness.
+    comment: "preStop sleep 10 removed all our deploy 502s."
+
+- id: tls-cert-expired
+  code: GW-TLS-EXPIRED
+  title: TLS certificate expired - x509 certificate has expired
+  service: api-gateway
+  language: any
+  infrastructure: kubernetes
+  error_type: CertificateExpired
+  severity: SEV1
+  error_codes:
+    - "x509: certificate has expired or is not yet valid"
+    - "SSL: CERTIFICATE_VERIFY_FAILED"
+    - "certificate has expired"
+    - "NET::ERR_CERT_DATE_INVALID"
+  tags: [tls, certificates, cert-manager, letsencrypt, security]
+  log_excerpt: |
+    ssl.SSLCertVerificationError: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: certificate has expired (_ssl.c:1006)
+    cert-manager: Failed to create Order: 403 urn:ietf:params:acme:error:unauthorized: Invalid response from http://api.contoso.com/.well-known/acme-challenge/
+  symptoms:
+    - "All HTTPS clients fail at once at a specific time; browsers show NET::ERR_CERT_DATE_INVALID."
+  root_cause: |
+    cert-manager failed to renew because the HTTP-01 challenge path was blocked by a new WAF rule; the
+    certificate expired 30 days later.
+  diagnosis:
+    - "`openssl s_client -connect api.contoso.com:443 -servername api.contoso.com | openssl x509 -noout -dates`."
+    - "`kubectl describe certificate` and `kubectl get challenges` for renewal errors."
+  diagnosis_commands: |
+    echo | openssl s_client -connect api.contoso.com:443 -servername api.contoso.com 2>/dev/null | openssl x509 -noout -dates
+    kubectl -n ingress describe certificate api-tls | tail -20
+    kubectl get challenges -A
+  mitigation:
+    - "Unblock the challenge path and force renewal: `cmctl renew api-tls -n ingress`."
+  permanent_fix:
+    - "Alert on certificates expiring within 14 days; monitor cert-manager Ready condition."
+    - "Prefer DNS-01 challenges to avoid HTTP path dependencies."
+  config_example:
+    lang: yaml
+    code: |
+      # Prometheus alert
+      - alert: CertificateExpiringSoon
+        expr: certmanager_certificate_expiration_timestamp_seconds - time() < 14*24*3600
+  postmortem:
+    incident_id: INC-2025-0031
+    date: 2025-01-19
+    environment: production
+    duration_min: 41
+    impact: "Public API unavailable over HTTPS for 41 minutes."
+    detection: "Synthetic probes and customer reports."
+    timeline:
+      - "00:00 Certificate expires."
+      - "00:05 Probes fail with certificate has expired."
+      - "00:41 WAF exception added, certificate renewed."
+    trigger: "WAF rule blocked ACME HTTP-01 challenges; renewal silently failed for 30 days."
+    resolution: "Renewal + expiry alerting + DNS-01."
+    action_items:
+      - "Certificate expiry alert (owner: SRE)."
+    lesson: "Automated renewal still needs monitoring."
+  kb:
+    title: "Python requests SSL: CERTIFICATE_VERIFY_FAILED certificate has expired"
+    question: |
+      Suddenly all calls to our API fail with `CERTIFICATE_VERIFY_FAILED certificate has expired`.
+    answer: |
+      Check the served certificate dates with openssl. If expired, renew it. Never disable verification (`verify=False`)
+      as a fix. If the leaf is valid, an intermediate in the chain might have expired.
+    comment: "Our intermediate CA expired; re-issuing the chain fixed it."
+
+- id: dns-resolution
+  code: PAY-DNS-EAI-AGAIN
+  title: Intermittent DNS resolution failures - Temporary failure in name resolution
+  service: payments-api
+  language: python
+  infrastructure: kubernetes
+  error_type: DNSError
+  severity: SEV3
+  error_codes:
+    - "socket.gaierror: [Errno -3] Temporary failure in name resolution"
+    - "getaddrinfo EAI_AGAIN"
+    - "Temporary failure in name resolution"
+  tags: [dns, coredns, network, kubernetes]
+  log_excerpt: |
+    httpx.ConnectError: [Errno -3] Temporary failure in name resolution
+    socket.gaierror: [Errno -3] Temporary failure in name resolution
+  symptoms:
+    - "Random outbound call failures to external APIs; rate correlates with traffic."
+  root_cause: |
+    CoreDNS was overloaded: `ndots:5` made every external lookup try 4 cluster search domains first,
+    multiplying DNS queries, and CoreDNS had only 2 replicas.
+  diagnosis:
+    - "`kubectl -n kube-system top pod -l k8s-app=kube-dns`."
+    - "Check CoreDNS logs for timeouts; check pod `/etc/resolv.conf` ndots."
+  diagnosis_commands: |
+    kubectl -n kube-system logs -l k8s-app=kube-dns --since=15m | grep -i timeout
+    kubectl -n payments exec deploy/payments-api -- cat /etc/resolv.conf
+  mitigation:
+    - "Scale CoreDNS replicas."
+  permanent_fix:
+    - "Use FQDNs with trailing dot or set `dnsConfig.options ndots: 2`; deploy NodeLocal DNSCache."
+  config_example:
+    lang: yaml
+    code: |
+      dnsConfig:
+        options:
+          - name: ndots
+            value: "2"
+  postmortem:
+    incident_id: INC-2025-0204
+    date: 2025-05-29
+    environment: production
+    duration_min: 50
+    impact: "1.5% of payment provider calls failed."
+    detection: "Payment provider error-rate alert."
+    timeline:
+      - "12:00 Traffic peak; EAI_AGAIN errors."
+      - "12:30 CoreDNS CPU saturated identified."
+      - "12:50 CoreDNS scaled to 6; ndots reduced."
+    trigger: "DNS query amplification from ndots:5 at peak traffic."
+    resolution: "Scaled CoreDNS, ndots:2, NodeLocal DNSCache."
+    action_items:
+      - "NodeLocal DNSCache in all clusters (owner: platform)."
+    lesson: "DNS is a shared dependency; monitor it like one."
+  kb:
+    title: "Kubernetes pods intermittently fail DNS with EAI_AGAIN"
+    question: |
+      Pods sometimes fail to resolve external hosts: `getaddrinfo EAI_AGAIN api.stripe.com`.
+    answer: |
+      Typical causes: CoreDNS overload, conntrack races on UDP, ndots:5 amplification. Scale CoreDNS, use NodeLocal
+      DNSCache, lower ndots.
+    comment: "NodeLocal DNSCache fixed ours."
+
+- id: azure-openai-429
+  code: AI-AOAI-429
+  title: Azure OpenAI 429 Too Many Requests - rate limit exceeded
+  service: sre-assistant
+  language: python
+  infrastructure: azure
+  error_type: RateLimitError
+  severity: SEV3
+  error_codes:
+    - "openai.RateLimitError: Error code: 429"
+    - "Requests to the ChatCompletions_Create Operation under Azure OpenAI API have exceeded token rate limit"
+    - "429 Too Many Requests"
+    - "Retry-After"
+  tags: [azure-openai, llm, rate-limit, tpm, quota]
+  log_excerpt: |
+    openai.RateLimitError: Error code: 429 - {'error': {'code': '429', 'message': 'Requests to the ChatCompletions_Create Operation under Azure OpenAI API version 2024-10-21 have exceeded token rate limit of your current OpenAI S0 pricing tier. Please retry after 6 seconds.'}}
+  symptoms:
+    - "LLM calls fail in bursts with 429; `Retry-After` header present."
+  root_cause: |
+    Deployment Tokens-Per-Minute (TPM) quota exceeded because an eval job and live traffic shared one deployment,
+    and prompts included very large contexts.
+  diagnosis:
+    - "Azure Monitor metric `AzureOpenAIRequests` filtered by StatusCode=429; check `ProcessedPromptTokens`."
+    - "Inspect token usage per request in app telemetry."
+  diagnosis_commands: |
+    az monitor metrics list --resource $AOAI_ID --metric AzureOpenAIRequests --filter "StatusCode eq '429'" --interval PT1M
+  mitigation:
+    - "Honour Retry-After with exponential backoff and jitter."
+  permanent_fix:
+    - "Separate deployments for batch/eval vs interactive traffic; raise TPM quota or use provisioned throughput."
+    - "Reduce prompt tokens (better chunking, fewer retrieved chunks); cache repeated queries."
+  config_example:
+    lang: python
+    code: |
+      client = AzureOpenAI(..., max_retries=5)  # SDK retries 429 honouring Retry-After
+  postmortem:
+    incident_id: INC-2025-0262
+    date: 2025-07-22
+    environment: staging
+    duration_min: 35
+    impact: "Assistant responses failed for 35 minutes during nightly evaluation."
+    detection: "Error-rate alert on the assistant API."
+    timeline:
+      - "01:00 Nightly evaluation starts on shared deployment."
+      - "01:02 429s on interactive requests."
+      - "01:35 Evaluation moved to a separate deployment."
+    trigger: "Shared TPM quota between batch evaluation and live traffic."
+    resolution: "Separate deployments and backoff."
+    action_items:
+      - "Token budget per request (owner: AI team)."
+    lesson: "Treat LLM quota as a capacity resource with isolation and budgets."
+  kb:
+    title: "Azure OpenAI 'exceeded token rate limit' 429 - how to handle?"
+    question: |
+      We hit `429 ... exceeded token rate limit of your current OpenAI S0 pricing tier`. Retry or more quota?
+    answer: |
+      Both: honour `Retry-After` with backoff, reduce tokens per request, isolate workloads into separate
+      deployments, and request more TPM or provisioned throughput for steady load.
+    comment: "Splitting batch jobs to their own deployment solved it."

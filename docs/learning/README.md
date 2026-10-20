@@ -12,8 +12,8 @@ This folder is your study guide for the project. Each phase has one file with th
 | # | Topic | Notes | Key concepts |
 |---|---|---|---|
 | 0 | Foundations | [00-foundations.md](00-foundations.md) | 12-factor config, provider abstraction, embeddings & cosine similarity, temperature, local vs hosted LLMs |
-| 1 | Demo service & corpus | *(next)* | Realistic failure modes, document metadata design, synthetic data |
-| 2 | Hybrid RAG | — | Parent-child chunking, pgvector/HNSW, BM25/tsvector, Reciprocal Rank Fusion |
+| 1 | Demo service & corpus | [01-demo-service-and-corpus.md](01-demo-service-and-corpus.md) | Structured logs, liveness vs readiness, pool vs DB limits, OOMKilled/137, metadata schema, hard negatives, drift tests |
+| 2 | Hybrid RAG | *(next)* | Parent-child chunking, pgvector/HNSW, BM25/tsvector, Reciprocal Rank Fusion |
 | 3 | MCP server | — | Model Context Protocol, tools/resources, stdio vs HTTP transport, least privilege |
 | 4 | Agent | — | ReAct, tool calling, LangGraph state/graph, memory, citations |
 | 5 | Guardrails | — | Redaction (spaCy + regex), prompt injection, human-in-the-loop, audit |
