@@ -13,6 +13,8 @@ dependencies = [
     "pyyaml>=6.0.3",
     "fastembed>=0.4",
     "onnxruntime<1.20 ; platform_machine == 'x86_64' and sys_platform == 'darwin'",
+    "mcp>=1.12",
+    "docker>=7.1",
 ]
 
 [dependency-groups]

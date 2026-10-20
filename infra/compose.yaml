@@ -19,5 +19,28 @@ services:
     volumes:
       - vectordb-data:/var/lib/postgresql/data
 
+  # Least privilege: the Docker socket is root-equivalent. The proxy only allows read-only GETs to the
+  # endpoints enabled below (containers, events); every POST/DELETE is rejected with 403.
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:0.3.0
+    environment:
+      CONTAINERS: 1
+      EVENTS: 1
+      POST: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  event-collector:
+    build: ./event-collector
+    environment:
+      DOCKER_HOST: tcp://docker-proxy:2375
+      EVENTS_DATABASE_URL: postgresql://sre:REMOVED-VECTORDB-PASSWORD@vectordb:5432/sre
+    depends_on:
+      vectordb:
+        condition: service_healthy
+      docker-proxy:
+        condition: service_started
+    restart: unless-stopped
+
 volumes:
   vectordb-data:

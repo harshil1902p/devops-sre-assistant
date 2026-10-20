@@ -1,0 +1,11 @@
+{
+  // Lets GitHub Copilot (agent mode) in VS Code use this MCP server.
+  // Open the Chat view -> Agent mode -> tools icon -> enable "sre-assistant".
+  "servers": {
+    "sre-assistant": {
+      "type": "stdio",
+      "command": "uv",
+      "args": ["run", "--directory", "${workspaceFolder}", "python", "-m", "sre_assistant.mcp_server"]
+    }
+  }
+}

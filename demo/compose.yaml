@@ -25,6 +25,7 @@ services:
     labels:
       <<: *sre-env
       sre.service: auth-service
+      sre.config_dir: /srv/config
     depends_on:
       auth-db:
         condition: service_healthy

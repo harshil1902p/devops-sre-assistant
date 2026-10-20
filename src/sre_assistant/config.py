@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     rerank_candidates: int = Field(30, ge=1, description="fused child chunks scored by the cross-encoder")
     keyword_max_df: float = Field(0.25, gt=0, le=1, description="drop query terms in > this share of chunks")
 
+    # --- MCP server ---
+    docker_host: str | None = Field(None, description="Docker API URL; auto-detects DOCKER_HOST / Colima socket")
+    mcp_log_max_tokens: int = Field(2500, ge=300, description="token budget for inspect_live_logs output")
+    mcp_audit_log: str | None = ".audit/mcp_audit.jsonl"
+
     @model_validator(mode="after")
     def _check_azure(self) -> "Settings":
         if self.llm_provider == "azure_openai" and not self.azure_openai_endpoint:
