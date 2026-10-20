@@ -33,3 +33,10 @@ def test_provider_factory_returns_ollama_clients():
     emb = get_embeddings(s)
     assert type(emb.inner).__name__ == "OllamaEmbeddings"
     assert emb.query_prefix == "search_query: " and emb.doc_prefix == "search_document: "
+
+
+def test_chat_and_embedding_providers_can_differ():
+    s = Settings(_env_file=None, chat_provider="azure_openai", azure_openai_endpoint="https://x.openai.azure.com/")
+    assert s.effective_chat_provider == "azure_openai" and s.effective_embedding_provider == "ollama"
+    assert type(get_chat_model(s)).__name__ == "AzureChatOpenAI"
+    assert type(get_embeddings(s).inner).__name__ == "OllamaEmbeddings"
