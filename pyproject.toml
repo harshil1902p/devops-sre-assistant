@@ -1,0 +1,39 @@
+[project]
+name = "sre-assistant"
+version = "0.1.0"
+description = "Intelligent DevOps & SRE Assistant: agentic RAG over runbooks + MCP live-telemetry tools"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "langchain-core>=0.3",
+    "langchain-ollama>=0.2",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sre_assistant"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: needs live services (Ollama, Postgres, Docker)",
+]
+addopts = "-m 'not integration'"
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
