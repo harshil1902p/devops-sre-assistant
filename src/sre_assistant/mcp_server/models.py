@@ -56,6 +56,8 @@ class LogReport(BaseModel):
     lines: list[str] = Field(description="most recent log lines at >= min_level (compact, redacted)")
     lines_omitted: int = Field(0, description="older lines dropped to fit the token budget")
     redactions: int = 0
+    pii_pseudonymised: dict[str, int] = Field({}, description="PII values replaced by stable tokens, by type")
+    security_flags: list[str] = Field([], description="possible prompt injections found in the logs (neutralised)")
     raw_tokens: int = Field(0, description="tokens the raw logs would have cost")
     output_tokens: int = 0
 
@@ -128,3 +130,14 @@ class RunbookResults(BaseModel):
     query: str
     results: list[RunbookHit]
     context_tokens: int
+    security_flags: list[str] = []
+
+
+class RemediationResult(BaseModel):
+    action: str
+    service: str
+    status: str
+    approved_by: str
+    container: str
+    restart_count: int
+    detail: str

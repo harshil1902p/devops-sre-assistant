@@ -9,6 +9,7 @@ conversation state in Postgres (LangGraph checkpointer) so follow-up questions c
 
 import argparse
 import asyncio
+import getpass
 import json
 import sys
 import time
@@ -18,6 +19,7 @@ from pathlib import Path
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from langgraph.types import Command
 from mcp.client import Client
 from mcp.client.stdio import StdioServerParameters
 
@@ -43,7 +45,39 @@ def _progress(update: dict) -> None:
         print(f"  · {node}{extra}", file=sys.stderr)
 
 
-async def run(question: str, thread: str, service: str | None, since: int, use_memory: bool, as_json: bool) -> dict:
+def _turn_answer(messages) -> str:
+    """Everything the agent said to the user in the latest turn (diagnosis + remediation outcome)."""
+    from langchain_core.messages import AIMessage
+
+    from sre_assistant.agent.context import is_user_message
+
+    start = max((i for i, m in enumerate(messages) if is_user_message(m)), default=0)
+    texts = [str(m.content) for m in messages[start:] if isinstance(m, AIMessage) and not m.tool_calls]
+    return "\n\n".join(t for t in texts if t.strip() and t.strip().upper() != "READY")
+
+
+def _ask_human(payload: dict, auto: str | None) -> dict:
+    """Human-in-the-loop decision. --auto-approve/--auto-deny exist for scripted demos and tests only."""
+    print("\n" + "=" * 70, file=sys.stderr)
+    print(f"APPROVAL REQUIRED: {payload['action']} on {payload['service']}", file=sys.stderr)
+    print(f"justification: {payload['justification']}", file=sys.stderr)
+    for e in payload.get("evidence", []):
+        print(f"  evidence: {e}", file=sys.stderr)
+    if payload.get("security_flags"):
+        print(f"  ⚠ possible prompt injection in the data: {payload['security_flags']}", file=sys.stderr)
+    if auto:
+        approved = auto == "approve"
+        print(f"(non-interactive: auto-{auto})", file=sys.stderr)
+    elif sys.stdin.isatty():
+        approved = input("Approve? [y/N] ").strip().lower() in ("y", "yes")
+    else:
+        approved = False
+        print("(no TTY: denied by default)", file=sys.stderr)
+    return {"approved": approved, "approver": getpass.getuser()}
+
+
+async def run(question: str, thread: str, service: str | None, since: int, use_memory: bool, as_json: bool,
+              auto: str | None = None) -> dict:  # fmt: skip
     s = get_settings()
     params = StdioServerParameters(command=sys.executable, args=["-m", "sre_assistant.mcp_server"], cwd=str(ROOT))
     async with AsyncExitStack() as stack:
@@ -55,7 +89,9 @@ async def run(question: str, thread: str, service: str | None, since: int, use_m
             dsn = s.database_url.get_secret_value()
             saver = await stack.enter_async_context(AsyncPostgresSaver.from_conn_string(dsn))
             await saver.setup()
-        graph = build_graph(get_chat_model(s, tag=f"agent:{thread}"), tools, checkpointer=saver)
+        secret = s.approval_secret.get_secret_value().encode() if s.approval_secret else None
+        graph = build_graph(get_chat_model(s, tag=f"agent:{thread}"), tools, checkpointer=saver,
+                            approval_secret=secret)  # fmt: skip
         config = {"configurable": {"thread_id": thread}, "recursion_limit": 40}
 
         inputs: dict = {"messages": [("user", question)], "since_minutes": since}
@@ -65,7 +101,13 @@ async def run(question: str, thread: str, service: str | None, since: int, use_m
         before = len((await graph.aget_state(config)).values.get("llm_calls", []))
         async for update in graph.astream(inputs, config, stream_mode="updates"):
             _progress(update)
-        state = (await graph.aget_state(config)).values
+        snapshot = await graph.aget_state(config)
+        while snapshot.interrupts:  # paused at a human-approval step; state is safely checkpointed meanwhile
+            decision = _ask_human(snapshot.interrupts[0].value, auto)
+            async for update in graph.astream(Command(resume=decision), config, stream_mode="updates"):
+                _progress(update)
+            snapshot = await graph.aget_state(config)
+        state = snapshot.values
 
     calls = state.get("llm_calls", [])[before:]
     usage = usage_summary(calls)
@@ -77,10 +119,12 @@ async def run(question: str, thread: str, service: str | None, since: int, use_m
     usage["wall_seconds"] = round(time.perf_counter() - t, 1)
     result = {
         "thread": thread,
-        "answer": state["messages"][-1].content,
+        "answer": _turn_answer(state["messages"]),
         "diagnosis": state.get("diagnosis"),
         "grounding": state.get("grounding"),
         "tools_used": state.get("tools_used"),
+        "security_flags": state.get("security_flags"),
+        "remediation": state.get("remediation"),
         "usage": usage,
     }
     if as_json:
@@ -99,9 +143,12 @@ def main() -> None:
     p.add_argument("--since", type=int, default=30, help="minutes of history to inspect")
     p.add_argument("--memory", action="store_true", help="in-memory checkpointer instead of Postgres")
     p.add_argument("--json", action="store_true")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--auto-approve", dest="auto", action="store_const", const="approve", help="demo only")
+    g.add_argument("--auto-deny", dest="auto", action="store_const", const="deny")
     a = p.parse_args()
     thread = a.thread or f"inc-{uuid.uuid4().hex[:8]}"
-    asyncio.run(run(a.question, thread, a.service, a.since, a.memory, a.json))
+    asyncio.run(run(a.question, thread, a.service, a.since, a.memory, a.json, a.auto))
 
 
 if __name__ == "__main__":

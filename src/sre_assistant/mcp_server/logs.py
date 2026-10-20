@@ -15,8 +15,8 @@ import re
 from collections import Counter
 from dataclasses import dataclass, field
 
+from sre_assistant.guardrails.sanitize import Sanitizer
 from sre_assistant.mcp_server.models import ErrorGroup, LogPattern, LogReport, NumericSummary
-from sre_assistant.mcp_server.redaction import redact_text
 from sre_assistant.rag.tokens import count_tokens
 
 LEVEL_ORDER = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40, "CRITICAL": 50}
@@ -119,6 +119,7 @@ def summarise_logs(
     min_level: str = "DEBUG",
     max_lines: int = 20,
     max_tokens: int = 2500,
+    sanitizer: Sanitizer | None = None,
 ) -> LogReport:
     parsed = [parse_line(r) for r in raw_lines if r.strip()]
     counts = Counter(p.level for p in parsed)
@@ -175,22 +176,16 @@ def summarise_logs(
             break
         g.traceback_tail = None
 
-    redactions = 0
-
-    def scrub(text: str | None) -> str | None:
-        nonlocal redactions
-        if not text:
-            return text
-        r = redact_text(text)
-        redactions += r.count
-        return r.text
-
-    for g in error_groups:
-        g.signature, g.search_hint, g.example = scrub(g.signature), scrub(g.search_hint), scrub(g.example)
-        g.traceback_tail = scrub(g.traceback_tail)
-    for x in top_patterns:
-        x.pattern, x.latest = scrub(x.pattern), scrub(x.latest)
-    safe_lines = [scrub(line) for line in rendered]
+    # Everything that will reach the LLM is sanitised in ONE batch (secrets -> PII -> injection).
+    sanitizer = sanitizer or Sanitizer()
+    fields = [(g, a) for g in error_groups for a in ("signature", "search_hint", "example", "traceback_tail")]
+    fields += [(x, a) for x in top_patterns for a in ("pattern", "latest")]
+    texts = [getattr(o, a) for o, a in fields] + rendered
+    clean, rep = sanitizer.sanitize_many(texts)
+    for (o, a), value in zip(fields, clean[: len(fields)], strict=True):
+        setattr(o, a, value)
+    safe_lines = clean[len(fields) :]
+    redactions = rep.redactions
 
     report = LogReport(
         service=service,
@@ -201,6 +196,8 @@ def summarise_logs(
         lines=safe_lines,
         lines_omitted=max(0, min(max_lines, len(parsed)) - len(safe_lines)),
         redactions=redactions,
+        pii_pseudonymised=rep.pii,
+        security_flags=rep.injection_flags,
         raw_tokens=count_tokens("\n".join(raw_lines)),
     )
     report.output_tokens = count_tokens(report.model_dump_json())

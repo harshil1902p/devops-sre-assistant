@@ -58,6 +58,15 @@ class Settings(BaseSettings):
     mcp_log_max_tokens: int = Field(2500, ge=300, description="token budget for inspect_live_logs output")
     mcp_audit_log: str | None = ".audit/mcp_audit.jsonl"
 
+    # --- Guardrails (Phase 5) ---
+    pii_ner: bool = Field(True, description="spaCy NER for person names (regex detectors always run)")
+    pii_key: SecretStr | None = Field(
+        None, description="HMAC key for stable PII pseudonyms; random per process if unset"
+    )
+    enable_remediation: bool = Field(False, description="expose the approval-gated restart_service tool")
+    remediation_allowed_envs: list[str] = ["staging"]
+    approval_secret: SecretStr | None = Field(None, description="signs human-approval tokens; never sent to the LLM")
+
     @property
     def effective_chat_provider(self) -> str:
         return self.chat_provider or self.llm_provider

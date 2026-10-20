@@ -16,8 +16,8 @@ This folder is your study guide for the project. Each phase has one file with th
 | 2 | Hybrid RAG | [02-hybrid-rag.md](02-hybrid-rag.md) | Parent-child (small-to-big) chunking, pgvector/HNSW, tsvector vs BM25, RRF, cross-encoder reranking, incremental ingestion, retrieval metrics |
 | 3 | MCP server | [03-mcp-server.md](03-mcp-server.md) | MCP primitives (tools/resources/prompts), transports, tool design for LLMs, log fingerprinting, redaction, least privilege, socket proxy, event persistence, audit |
 | 4 | Agent | [04-agent.md](04-agent.md) | Workflow vs agent, LangGraph state/reducers/checkpointer, ReAct, guards, incident windows, grounding, structured output, keyless Azure OpenAI, spend cap, publishing safely |
-| 5 | Guardrails | *(next)* | Redaction (spaCy + regex), prompt injection, human-in-the-loop, audit |
-| 6 | Evaluation | — | Golden sets, recall@k/MRR, LLM-as-a-Judge, faithfulness, CI gates |
+| 5 | Guardrails | [05-guardrails.md](05-guardrails.md) | Redaction vs pseudonymisation, Luhn, NER + fairness gap, injection defence in depth, capability control, interrupt()/HITL, signed approvals, output policy |
+| 6 | Evaluation | *(next)* | Golden sets, recall@k/MRR, LLM-as-a-Judge, faithfulness, CI gates |
 | 7 | Azure | — | Azure OpenAI, AI Search hybrid + semantic ranker, Monitor/KQL, Key Vault, Managed Identity, Bicep |
 | 8 | Production | — | AuthN/Z, OpenTelemetry, cost/token tracking, scaling, AKS |
 

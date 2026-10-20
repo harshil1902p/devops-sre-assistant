@@ -42,7 +42,10 @@ def main() -> None:
     demo, infra = _read_env(ROOT / "demo/.env"), _read_env(ROOT / "infra/.env")
     url = f"postgresql://sre:{infra['VECTORDB_PASSWORD']}@localhost:5433/sre"
     example = (ROOT / ".env.example").read_text()
-    _write_once(ROOT / ".env", re.sub(r"(?m)^SRE_DATABASE_URL=.*$", f"SRE_DATABASE_URL={url}", example))
+    env = re.sub(r"(?m)^SRE_DATABASE_URL=.*$", f"SRE_DATABASE_URL={url}", example)
+    env += (f"\n# --- generated guardrail secrets (Phase 5) ---\nSRE_PII_KEY={secrets.token_hex(32)}\n"
+            f"SRE_APPROVAL_SECRET={secrets.token_hex(32)}\n")  # fmt: skip
+    _write_once(ROOT / ".env", env)
 
     tpl = (ROOT / "demo/auth-service/config/app.example.yaml").read_text()
     rendered = tpl.replace("${AUTH_DB_PASSWORD}", demo["AUTH_DB_PASSWORD"]).replace(

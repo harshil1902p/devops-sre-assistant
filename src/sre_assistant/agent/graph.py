@@ -26,12 +26,15 @@ from langchain_core.messages import AIMessage, AnyMessage, SystemMessage, ToolMe
 from langchain_core.tools import BaseTool
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
+from langgraph.types import interrupt
 from pydantic import BaseModel, Field
 
 from sre_assistant.agent.context import compact, is_user_message, note
 from sre_assistant.agent.diagnosis import Diagnosis, check_grounding, render_markdown
 from sre_assistant.agent.prompts import FINAL_INSTRUCTION, FOLLOWUP_HINT, SYSTEM_PROMPT
 from sre_assistant.agent.timeline import build_timeline, uncovered_windows
+from sre_assistant.guardrails import policy
+from sre_assistant.guardrails.approval import mint
 
 TRIAGE_TOOLS = ("check_system_health", "inspect_live_logs", "get_recent_events")
 
@@ -54,6 +57,8 @@ class AgentState(TypedDict, total=False):
     search_queries: list[str]
     diagnosis: dict | None
     grounding: dict | None
+    security_flags: Annotated[list[str], _union]
+    remediation: dict | None
     llm_calls: Annotated[list[dict], operator.add]
 
 
@@ -69,9 +74,13 @@ def _usage(node: str, msg: AIMessage | None, started: float) -> dict:
 
 
 def build_graph(model: BaseChatModel, tools: list[BaseTool], checkpointer=None, max_tool_calls: int = 8,
-                max_context_tokens: int = 24_000):  # fmt: skip
+                max_context_tokens: int = 24_000, approval_secret: bytes | None = None):  # fmt: skip
     by_name = {t.name: t for t in tools}
-    llm_with_tools = model.bind_tools(tools)
+    # CAPABILITY CONTROL: the LLM only ever sees read-only tools. Destructive tools exist solely for the
+    # approval node (trusted code), so no prompt injection can make the model call them.
+    llm_tools = [t for t in tools if (t.metadata or {}).get("read_only", True)]
+    llm_with_tools = model.bind_tools(llm_tools)
+    llm_tool_names = {t.name for t in llm_tools}
     structured = model.with_structured_output(Diagnosis, method="json_schema", include_raw=True)
     intake_llm = model.with_structured_output(Intake, method="json_schema", include_raw=True)
 
@@ -110,11 +119,15 @@ def build_graph(model: BaseChatModel, tools: list[BaseTool], checkpointer=None, 
         calls = [
             ("check_system_health", {"service_name": svc}),
             ("inspect_live_logs", {"service_name": svc, "lines_count": 2000, "since_minutes": since}),
-            ("get_recent_events", {"service_name": svc, "since_minutes": max(since, 60)}),
+            (
+                "get_recent_events",
+                {"service_name": svc, "since_minutes": max(since, 10)},
+            ),  # same window as the question
         ]
         ids = [f"triage_{uuid.uuid4().hex[:10]}" for _ in calls]
         results = await asyncio.gather(*(run_tool(n, a, i) for (n, a), i in zip(calls, ids, strict=True)))
         art = {n: r.artifact for (n, _), r in zip(calls, results, strict=True)}
+        flags = (art.get("inspect_live_logs") or {}).get("security_flags", [])
         timeline, windows = build_timeline(
             art["check_system_health"], art["inspect_live_logs"], art["get_recent_events"]
         )
@@ -129,6 +142,7 @@ def build_graph(model: BaseChatModel, tools: list[BaseTool], checkpointer=None, 
             "timeline": timeline,
             "windows": windows,
             "search_queries": [],
+            "security_flags": flags,
             "tools_used": list(TRIAGE_TOOLS),
         }  # fmt: skip
 
@@ -146,9 +160,14 @@ def build_graph(model: BaseChatModel, tools: list[BaseTool], checkpointer=None, 
             (tc["name"], json.dumps(tc["args"], sort_keys=True))
             for m in state["messages"][:-1] if isinstance(m, AIMessage) for tc in m.tool_calls
         }  # fmt: skip
-        out, retrieved, queries = [], [], list(state.get("search_queries", []))
+        out, retrieved, queries, flags = [], [], list(state.get("search_queries", [])), []
         for tc in last.tool_calls:
             key = (tc["name"], json.dumps(tc["args"], sort_keys=True))
+            if tc["name"] not in llm_tool_names:
+                out.append(ToolMessage(f"REFUSED: '{tc['name']}' is not available to the assistant; changes require "
+                                       "a human-approved proposal in the final diagnosis.",
+                                       tool_call_id=tc["id"], name=tc["name"], status="error"))  # fmt: skip
+                continue
             if n >= max_tool_calls:
                 out.append(ToolMessage("SKIPPED: tool budget exhausted. Answer with the evidence you have.",
                                        tool_call_id=tc["id"], name=tc["name"], status="error"))  # fmt: skip
@@ -160,13 +179,15 @@ def build_graph(model: BaseChatModel, tools: list[BaseTool], checkpointer=None, 
             seen.add(key)
             msg = await run_tool(tc["name"], tc["args"], tc["id"])
             n, used = n + 1, [*used, tc["name"]]
+            if isinstance(msg.artifact, dict):
+                flags += msg.artifact.get("security_flags", [])
             if tc["name"] == "search_runbooks":
                 queries.append(str(tc["args"].get("query", "")))
                 if isinstance(msg.artifact, dict):
                     retrieved += [r["doc_id"] for r in msg.artifact.get("results", [])]
             out.append(msg)
         return {"messages": out, "tool_calls": n, "tools_used": used, "retrieved_doc_ids": retrieved,
-                "search_queries": queries}  # fmt: skip
+                "search_queries": queries, "security_flags": flags}  # fmt: skip
 
     async def remind(state: AgentState) -> dict:
         missing = uncovered_windows(state.get("windows", []), state.get("search_queries", []))
@@ -193,12 +214,52 @@ def build_graph(model: BaseChatModel, tools: list[BaseTool], checkpointer=None, 
             return {"messages": [AIMessage(f"Could not produce a structured diagnosis: {err}")],
                     "llm_calls": [_usage("respond", out.get("raw"), t)]}  # fmt: skip
         g = check_grounding(d, set(state.get("retrieved_doc_ids", [])), set(state.get("tools_used", [])))
-        d = d.model_copy(update={"citations": g.valid_citations})
+        mitigation, f1 = policy.enforce(d.immediate_mitigation)
+        fix, f2 = policy.enforce(d.permanent_fix)
+        g = g.model_copy(update={"policy_flags": f1 + f2, "security_flags": state.get("security_flags", [])})
+        d = d.model_copy(update={"citations": g.valid_citations, "immediate_mitigation": mitigation,
+                                 "permanent_fix": fix})  # fmt: skip
         return {
             "messages": [AIMessage(render_markdown(d, g))],
             "diagnosis": d.model_dump(),
             "grounding": g.model_dump(),
             "llm_calls": [_usage("respond", out.get("raw"), t)],
+        }
+
+    async def approval(state: AgentState) -> dict:
+        """Human-in-the-loop: pause the graph (checkpointed) until a human approves or rejects the proposal."""
+        d, svc = state["diagnosis"], state["service"]
+        action = d["proposed_action"]
+        decision = interrupt(
+            {
+                "action": action,
+                "service": svc,
+                "justification": d["action_justification"],
+                "evidence": d["evidence"][:3],
+                "security_flags": state.get("security_flags", []),
+            }
+        )
+        decision = decision if isinstance(decision, dict) else {}
+        approver = str(decision.get("approver", "unknown"))
+        if not decision.get("approved"):
+            text = f"Proposed `{action}` was **rejected** by {approver}. No action taken."
+            return {"remediation": {"status": "rejected", "approver": approver}, "messages": [AIMessage(text)]}
+        if approval_secret is None or action not in by_name:
+            text = "Remediation is not enabled on this deployment; no action taken."
+            return {"remediation": {"status": "unavailable"}, "messages": [AIMessage(text)]}
+
+        token = mint(approval_secret, action, svc, approver)  # minted by trusted code; never shown to the LLM
+        reason = d["action_justification"][:400] or "approved by human"
+        msg = await run_tool(action, {"service_name": svc, "approval_token": token, "reason": reason})
+        ok = msg.status != "error"
+        outcome = "**executed**." if ok else f"**failed**: {str(msg.content)[:200]}"
+        return {
+            "remediation": {
+                "status": "executed" if ok else "failed",
+                "approver": approver,
+                "result": msg.artifact if ok else str(msg.content)[:300],
+            },
+            "messages": [AIMessage(f"`{action}` on `{svc}` approved by {approver}: {outcome}")],
         }
 
     # ---------------------------------------------------------------- routing
@@ -221,13 +282,17 @@ def build_graph(model: BaseChatModel, tools: list[BaseTool], checkpointer=None, 
             return "remind"  # coverage guard: every significant incident window must be investigated
         return "respond"
 
+    def route_respond(state: AgentState) -> str:
+        d = state.get("diagnosis") or {}
+        return "approval" if d.get("proposed_action", "none") != "none" else END
+
     def route_tools(state: AgentState) -> str:
         return "respond" if state.get("tool_calls", 0) >= max_tool_calls and not state.get("followup") else "agent"
 
     g = StateGraph(AgentState)
     for name, fn in [("start_turn", start_turn), ("intake", intake), ("triage", triage), ("agent", agent),
                      ("tools", tools_node), ("remind", remind), ("respond", respond),
-                     ("finish_followup", finish_followup)]:  # fmt: skip
+                     ("finish_followup", finish_followup), ("approval", approval)]:  # fmt: skip
         g.add_node(name, fn)
     g.add_edge(START, "start_turn")
     g.add_conditional_edges("start_turn", route_start, ["intake", "triage", "agent"])
@@ -237,7 +302,8 @@ def build_graph(model: BaseChatModel, tools: list[BaseTool], checkpointer=None, 
     g.add_edge("finish_followup", END)
     g.add_conditional_edges("tools", route_tools, ["agent", "respond"])
     g.add_edge("remind", "agent")
-    g.add_edge("respond", END)
+    g.add_conditional_edges("respond", route_respond, ["approval", END])
+    g.add_edge("approval", END)
     return g.compile(checkpointer=checkpointer)
 
 

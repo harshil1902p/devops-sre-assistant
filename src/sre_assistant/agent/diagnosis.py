@@ -27,6 +27,10 @@ class Diagnosis(BaseModel):
         description="other, independent problems seen in the window (with time and evidence); empty if none"
     )
     open_questions: list[str] = Field(description="what is still unknown or unverified")
+    proposed_action: Literal["none", "restart_service"] = Field(
+        description="automated remediation to PROPOSE to a human (never executed without approval); 'none' if unsure"
+    )
+    action_justification: str = Field(description="why the proposed action is safe and helpful; empty if none")
 
     @field_validator("*", mode="before")
     @classmethod
@@ -41,6 +45,8 @@ class GroundingReport(BaseModel):
     valid_citations: list[str]
     invalid_citations: list[str]
     warnings: list[str]
+    policy_flags: list[str] = []
+    security_flags: list[str] = []
 
 
 _DOC_ID = re.compile(r"\b(?:RB|PM|KB)-[A-Z0-9]+(?:-[A-Z0-9]+)*\b")
@@ -84,6 +90,14 @@ def render_markdown(d: Diagnosis, g: GroundingReport) -> str:
         parts += ["### Separate issues in the same window", bullets(d.separate_issues)]
     if d.open_questions:
         parts += ["### Open questions", bullets(d.open_questions)]
-    if g.warnings:
-        parts += ["### ⚠️ Grounding warnings", bullets(g.warnings)]
+    if d.proposed_action != "none":
+        parts += [
+            "### Proposed automated action (needs human approval)",
+            f"`{d.proposed_action}`: {d.action_justification}",
+        ]
+    if g.security_flags:
+        parts += ["### 🛡️ Security: possible prompt injection found in the data (neutralised, not followed)",
+                  bullets(g.security_flags)]  # fmt: skip
+    if g.warnings or g.policy_flags:
+        parts += ["### ⚠️ Grounding / policy warnings", bullets(g.warnings + g.policy_flags)]
     return "\n\n".join(parts)

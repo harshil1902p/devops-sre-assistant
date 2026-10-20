@@ -27,6 +27,8 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from sre_assistant.config import Settings, get_settings
+from sre_assistant.guardrails.approval import ApprovalError, ApprovalVerifier
+from sre_assistant.guardrails.sanitize import Sanitizer, default_sanitizer
 from sre_assistant.mcp_server.audit import audited
 from sre_assistant.mcp_server.backends.base import RawEvent, ServiceNotFound, TelemetryBackend
 from sre_assistant.mcp_server.config_files import MAX_CONFIG_BYTES, ConfigAccessError, resolve_config_path
@@ -38,12 +40,13 @@ from sre_assistant.mcp_server.models import (
     HealthProbe,
     HealthReport,
     LogReport,
+    RemediationResult,
     RunbookHit,
     RunbookResults,
     ServiceInfo,
     ServiceList,
 )
-from sre_assistant.mcp_server.redaction import MASK, is_secret_key, redact, redact_mapping, redact_text
+from sre_assistant.mcp_server.redaction import MASK, is_secret_key, redact_mapping, redact_text
 
 INSTRUCTIONS = """\
 Read-only SRE diagnostics for services in the monitored environment.
@@ -56,6 +59,7 @@ Recommended workflow when a service misbehaves:
 Never guess values that a tool can verify. These tools cannot change anything."""
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
+DESTRUCTIVE = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False)
 
 ServiceName = Annotated[
     str,
@@ -96,8 +100,12 @@ def build_server(
     retriever_factory: Callable[[], object] | None = None,
     corpus_dir: Path | None = None,
     settings: Settings | None = None,
+    sanitizer: Sanitizer | None = None,
 ) -> MCPServer:
     s = settings or get_settings()
+    sanitizer = sanitizer or default_sanitizer(
+        key=s.pii_key.get_secret_value().encode() if s.pii_key else None, use_ner=s.pii_ner
+    )
     srv = MCPServer("sre-assistant", title="SRE Assistant", instructions=INSTRUCTIONS, version="0.3.0")
     lazy: dict[str, object] = {}
 
@@ -130,7 +138,9 @@ def build_server(
         traceback tail and a `search_hint` to pass to search_runbooks), patterns (other recurring messages with
         counts and numeric trends such as rss_mb or duration_ms) and the newest lines. Token-budgeted, redacted."""
         raw = _call(backend.get_logs, service_name, lines_count, since_minutes)
-        return summarise_logs(service_name, raw, min_level, max_lines=20, max_tokens=s.mcp_log_max_tokens)
+        return summarise_logs(
+            service_name, raw, min_level, max_lines=20, max_tokens=s.mcp_log_max_tokens, sanitizer=sanitizer
+        )
 
     @srv.tool(annotations=READ_ONLY)
     @audited
@@ -145,8 +155,8 @@ def build_server(
         return HealthReport(
             service=service_name, container=h.record.container, status=h.record.status, health=h.record.health,
             failing_streak=h.failing_streak,
-            recent_probes=[HealthProbe(end=p["end"], exit_code=p["exit_code"], output=redact(p["output"] or ""))
-                           for p in h.probes],
+            recent_probes=[HealthProbe(end=p["end"], exit_code=p["exit_code"],
+                                       output=sanitizer.sanitize(p["output"] or "")[0]) for p in h.probes],
             restart_count=h.record.restart_count, oom_killed_last_exit=h.oom_killed, exit_code=h.exit_code,
             started_at=h.record.started_at, uptime_seconds=_uptime(h.record.started_at),
             cpu_percent=h.stats.cpu_percent, memory_usage_mb=h.stats.memory_usage_mb,
@@ -214,7 +224,7 @@ def build_server(
             raise ToolError("knowledge base is not configured on this server")
         try:
             retriever = lazy.setdefault("retriever", retriever_factory())
-            q = redact(query)
+            q, _ = sanitizer.sanitize(query)
             res = retriever.retrieve(q, filters={"service": service} if service else None, top_parents=top_k)
             if service and not res.sections:
                 res = retriever.retrieve(q, top_parents=top_k)
@@ -223,16 +233,46 @@ def build_server(
             raise ToolError(
                 f"knowledge base unavailable ({type(e).__name__}); continue diagnosis with live tools"
             ) from e
+        # Knowledge-base documents are untrusted too (anyone with wiki access can edit a runbook).
+        contents, rep = sanitizer.sanitize_many([x.content for x in res.sections])
         return RunbookResults(
             query=q,
             results=[
                 RunbookHit(citation=x.citation, doc_id=x.doc_id, doc_type=x.doc_type, title=x.title,
                            service=x.metadata["service"], created=str(x.metadata["created"]),
-                           score=round(x.score, 4), content=x.content)
-                for x in res.sections
+                           score=round(x.score, 4), content=content)
+                for x, content in zip(res.sections, contents, strict=True)
             ],
             context_tokens=res.context_tokens,
+            security_flags=rep.injection_flags,
         )  # fmt: skip
+
+    # ------------------------------------------------- remediation (opt-in, approval-gated)
+    if s.enable_remediation and s.approval_secret:
+        verifier = ApprovalVerifier(s.approval_secret.get_secret_value().encode())
+
+        @srv.tool(annotations=DESTRUCTIVE)
+        @audited
+        def restart_service(
+            service_name: ServiceName,
+            approval_token: Annotated[str, Field(min_length=20, max_length=2000)],
+            reason: Annotated[str, Field(min_length=5, max_length=500)],
+        ) -> RemediationResult:
+            """Restart a service. DESTRUCTIVE: requires a human approval token minted by the approval workflow.
+            Only allowed in non-production environments listed in remediation_allowed_envs."""
+            record = next((r for r in backend.list_services() if r.service == service_name), None)
+            if record is None:
+                raise ToolError(f"service '{service_name}' not found")
+            if record.environment not in s.remediation_allowed_envs:
+                raise ToolError(f"restarts are not allowed in environment '{record.environment}'")
+            try:
+                approval = verifier.verify(approval_token, "restart_service", service_name)
+            except ApprovalError as e:
+                raise ToolError(f"approval rejected: {e}") from e
+            after = _call(backend.restart, service_name)
+            return RemediationResult(action="restart_service", service=service_name, status=after.status,
+                                     approved_by=approval.approver, container=after.container,
+                                     restart_count=after.restart_count, detail=f"reason: {reason[:200]}")  # fmt: skip
 
     # -------------------------------------------------------------- resources
     @srv.resource("runbook://{doc_id}", mime_type="text/markdown", description="Full knowledge-base document by id")

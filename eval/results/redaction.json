@@ -1,0 +1,55 @@
+{
+  "n_planted": 320,
+  "n_negative": 16,
+  "results": [
+    {
+      "ner": false,
+      "recall": {
+        "EMAIL": 1,
+        "IPv4": 1,
+        "IPv6": 1,
+        "PHONE": 1,
+        "CARD": 1,
+        "SIN": 1,
+        "PERSON": 0,
+        "SECRET": 1
+      },
+      "overall_recall": 0.875,
+      "negatives_preserved": 1.0,
+      "false_positives": [],
+      "lines_per_second": 11625,
+      "misses": {
+        "PERSON": [
+          "Aisha Khan",
+          "Anjali Sharma",
+          "Arjun Mehta",
+          "Carlos Mendoza",
+          "Emily Chen"
+        ]
+      }
+    },
+    {
+      "ner": true,
+      "recall": {
+        "EMAIL": 1,
+        "IPv4": 1,
+        "IPv6": 1,
+        "PHONE": 1,
+        "CARD": 1,
+        "SIN": 1,
+        "PERSON": 0.875,
+        "SECRET": 1
+      },
+      "overall_recall": 0.984,
+      "negatives_preserved": 1.0,
+      "false_positives": [],
+      "lines_per_second": 170,
+      "misses": {
+        "PERSON": [
+          "Anjali Sharma",
+          "Jean-Luc Tremblay"
+        ]
+      }
+    }
+  ]
+}

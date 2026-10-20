@@ -123,7 +123,7 @@ def readyz():
 
 
 @app.post("/login")
-def login(body: LoginRequest):
+def login(body: LoginRequest, request: Request):
     attempts_key = f"login_attempts:{body.username}"
     attempts = cache.incr(attempts_key)
     cache.expire(attempts_key, 60)
@@ -136,6 +136,10 @@ def login(body: LoginRequest):
         ).first()
 
     if row is None or hash_password(body.password, row.salt) != row.password_hash:
+        # Realistic (and risky) logging: user-controlled input + client IP end up in logs -> PII and an
+        # injection vector. The SRE assistant must pseudonymise/neutralise this before any LLM sees it.
+        client = request.headers.get("x-forwarded-for") or (request.client.host if request.client else "?")
+        log.warning("login failed for user %s from %s", body.username[:200], client)
         return JSONResponse(status_code=401, content={"error": "invalid_credentials"})
 
     token = secrets.token_urlsafe(24)

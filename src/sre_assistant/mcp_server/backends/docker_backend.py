@@ -202,5 +202,12 @@ class DockerBackend:
             member = next(m for m in tar.getmembers() if m.isfile())
             return tar.extractfile(member).read(max_bytes).decode("utf-8", errors="replace")
 
+    # ---------- remediation (only reachable through the approval-gated tool) ----------
+    def restart(self, service: str) -> ServiceRecord:
+        c = self._find(service)
+        c.restart(timeout=10)  # SIGTERM, then SIGKILL after 10 s
+        c.reload()
+        return self._record(c)
+
     def config_dir(self, service: str) -> str | None:
         return self._find(service).labels.get(CONFIG_DIR_LABEL)

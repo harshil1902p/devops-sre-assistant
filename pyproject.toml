@@ -22,6 +22,8 @@ dependencies = [
     "psycopg[binary]>=3.2",
     "pgvector>=0.3",
     "tiktoken>=0.8",
+    "spacy>=3.8,<3.9",
+    "en-core-web-sm",
 ]
 
 [dependency-groups]
@@ -57,3 +59,9 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 # Markdown templates: line breaks inside them would change the rendered documents.
 "src/sre_assistant/corpus/generate.py" = ["E501"]
 "tests/**" = ["E501"]
+# Regex pattern tables are easier to review one pattern per line.
+"src/sre_assistant/guardrails/injection.py" = ["E501"]
+"src/sre_assistant/guardrails/policy.py" = ["E501"]
+
+[tool.uv.sources]
+en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }

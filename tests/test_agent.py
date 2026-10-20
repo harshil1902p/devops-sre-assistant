@@ -29,7 +29,7 @@ def diag(**over) -> Diagnosis:
         evidence=["inspect_live_logs: redis.exceptions.TimeoutError x5"], root_cause="Redis blocked by slow command",
         confidence="high", immediate_mitigation=["Stop the offending job (requires approval)"],
         permanent_fix=["Fail-open rate limiter"], citations=["[RB-AUTH-REDIS-TIMEOUT] Root Cause"], separate_issues=[],
-        open_questions=[],
+        open_questions=[], proposed_action="none", action_justification="",
     )  # fmt: skip
     return Diagnosis(**(base | over))
 
