@@ -12,6 +12,29 @@
 
 Local stack: **Ollama** serving `qwen2.5:7b` (chat, supports tool calling) and `nomic-embed-text` (768-dim embeddings).
 
+### Environment setup done in this phase
+| Tool | How installed | Why |
+|---|---|---|
+| Ollama | already installed (`open -a Ollama`) | Free local LLM + embeddings server on `localhost:11434` |
+| `qwen2.5:7b` | `ollama pull qwen2.5:7b` (4.7 GB) | Chat model with good **tool-calling** support for its size |
+| `nomic-embed-text` | `ollama pull nomic-embed-text` (274 MB) | 768-dim embedding model, 8k-token context |
+| Colima + Docker CLI + Compose | `brew install colima docker docker-compose` | Lightweight Docker runtime (no Docker Desktop licence) for pgvector & demo services |
+| Compose plugin path | `~/.docker/config.json` → `"cliPluginsExtraDirs": ["/usr/local/lib/docker/cli-plugins"]` | So `docker compose` finds the brew plugin |
+| uv | already installed | Fast Python package/venv manager; `uv.lock` makes builds reproducible |
+
+Daily start-up: `open -a Ollama` and `colima start` (stop with `colima stop`).
+
+### Smoke-test results (your machine, Intel i7-9750H, 16 GB)
+```
+[chat]  32.4s (cold start, includes loading the model into RAM) -> correct explanation of QueuePool exhaustion
+[chat]  token usage: 58 in / 40 out
+[embed] 0.9s, dim=768 (configured 768)
+[embed] cos(query, related)   = 0.699   "connection pool exhausted" vs "QueuePool limit overflowed"
+[embed] cos(query, unrelated) = 0.372   "connection pool exhausted" vs "rotate TLS certificates"
+```
+Takeaway: almost no shared words, yet the related pair scores far higher → embeddings capture **meaning**,
+which is why RAG can find a runbook even when the log wording differs from the document wording.
+
 ## Concepts you must be able to explain
 
 ### 1. Why a provider abstraction?
@@ -60,3 +83,50 @@ groundedness comes from RAG + citations (Phase 2/4) and is *measured* by evals (
 uv run python scripts/smoke_test.py        # run twice: notice the warm start is much faster
 SRE_CHAT_MODEL=gemma3:270m uv run python scripts/smoke_test.py   # tiny model: compare answer quality
 ```
+
+## Quiz (answer first, then expand to check)
+
+**Q1. Your pgvector column is `vector(768)` and you switch to `text-embedding-3-small`. What breaks, and how do you migrate with zero downtime?**
+<details><summary>Model answer</summary>
+
+- **What breaks:** `text-embedding-3-small` outputs **1536** dims → inserts into `vector(768)` fail. Even if dims matched,
+  the two models live in **different vector spaces**: a query embedded with model B compared to documents embedded
+  with model A gives meaningless similarity scores. The HNSW index is also tied to the column's dimension.
+- **Migration (blue/green re-index):**
+  1. Create a new table/index (e.g., `chunks_v2` with `vector(1536)`), or a new Azure AI Search index.
+  2. Re-embed **all** child chunks with the new model (batch, rate-limited, idempotent so it can resume).
+  3. Run the **evaluation suite** (recall@k, faithfulness) against v2 and compare to v1.
+  4. Flip a config flag/alias (`SRE_EMBEDDING_MODEL`, `SRE_EMBEDDING_DIM`, index name) so queries go to v2.
+  5. Keep v1 for rollback, then drop it after a soak period.
+- **Interview bonus:** store `embedding_model` + `embedding_version` as metadata on every row so you can detect mixed spaces.
+</details>
+
+**Q2. Why does the codebase call `get_chat_model()` instead of `ChatOllama(...)` directly?**
+<details><summary>Model answer</summary>
+
+Dependency inversion: business logic depends on the `BaseChatModel` interface; a factory picks the concrete vendor from
+config. Swap Ollama → Azure OpenAI by env vars only, run the same evals across models, and mock it easily in tests.
+</details>
+
+**Q3. Does `temperature=0` prevent hallucinations?**
+<details><summary>Model answer</summary>
+
+No. It reduces **randomness** (more repeatable output). A model can still confidently produce a wrong answer at
+temperature 0. Hallucinations are reduced by **grounding** (RAG context + required citations), constrained tools,
+and they are **measured** with faithfulness evals (Phase 6).
+</details>
+
+**Q4. Why is the first chat call ~30 s but later calls much faster?**
+<details><summary>Model answer</summary>
+
+Cold start: Ollama loads ~4.7 GB of weights from disk into RAM on the first request, then keeps the model resident
+(default ~5 min keep-alive). In production the equivalent is model warm-up / provisioned throughput; serverless
+containers scaled to zero have the same cold-start problem.
+</details>
+
+**Q5. Where should an Azure OpenAI key live in production?**
+<details><summary>Model answer</summary>
+
+Ideally nowhere: use **Managed Identity** with Entra ID RBAC (`Cognitive Services OpenAI User` role). If a key is
+unavoidable, store it in **Key Vault**, reference it from the app, rotate it, and never log it (`SecretStr`).
+</details>
