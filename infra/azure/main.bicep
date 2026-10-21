@@ -48,6 +48,12 @@ param deployApps bool = false
 
 param imageTag string = 'latest'
 
+@description('Phase 8: create the container registry (Basic, ~$0.17/day) before pushing images')
+param deployRegistry bool = false
+
+@description('Phase 8: Entra app (client) id the API accepts tokens for (passed at deploy time)')
+param apiAudience string = ''
+
 @description('GitHub repo (owner/name) allowed to federate into the agent identity (OIDC)')
 param githubRepo string = ''
 
@@ -118,6 +124,8 @@ module workload 'modules/workload.bicep' = {
     imageTag: imageTag
     githubRepo: githubRepo
     githubOidcSubject: githubOidcSubject
+    deployRegistry: deployRegistry
+    apiAudience: apiAudience
   }
 }
 

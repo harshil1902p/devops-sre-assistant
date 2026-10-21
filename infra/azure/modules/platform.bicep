@@ -24,6 +24,12 @@ param githubEnvironment string = 'cloud-eval'
 (defends against a deleted repo/owner name being re-registered). Empty = legacy name-based subject.''')
 param githubOidcSubject string = ''
 
+@description('Phase 8: container registry (Basic, ~$0.17/day). Needed before images can be pushed')
+param deployRegistry bool = false
+
+@description('Phase 8: Entra app (client) id or app id URI the API accepts tokens for')
+param apiAudience string = ''
+
 @description('Semantic ranker plan: free = 1,000 queries/month at no cost')
 @allowed(['disabled', 'free'])
 param semanticSearch string = 'free'
@@ -37,6 +43,7 @@ var roles = {
   monitoringMetricsPublisher: '3913510d-42f4-4e42-8a64-420c390055eb' // also grants Logs Ingestion API upload
   keyVaultSecretsOfficer: 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7' // public built-in role id gitleaks:allow
   keyVaultSecretsUser: '4633458b-17de-408a-b874-0445c86b69e6' // public built-in role id gitleaks:allow
+  acrPull: '7f951dda-4ed3-4680-a7ca-43fe172d538d'
 }
 
 resource openai 'Microsoft.CognitiveServices/accounts@2024-10-01' existing = {
@@ -265,6 +272,172 @@ resource agentOpenAiUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
   }
 }
 
+// =================================================================== Phase 8
+var withRegistry = deployRegistry || deployApps
+
+resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' = if (withRegistry) {
+  name: 'acr${prefix}${suffix}'
+  location: location
+  tags: tags
+  sku: {
+    name: 'Basic'
+  }
+  properties: {
+    adminUserEnabled: false // pulls use the managed identity (AcrPull), never a registry password
+  }
+}
+
+resource agentAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (withRegistry) {
+  scope: acr
+  name: guid(acr.id, roles.acrPull, 'agent')
+  properties: {
+    principalId: agentIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.acrPull)
+  }
+}
+
+resource appi 'Microsoft.Insights/components@2020-02-02' = if (deployApps) {
+  name: 'appi-${prefix}-${suffix}'
+  location: location
+  tags: tags
+  kind: 'web'
+  properties: {
+    Application_Type: 'web'
+    WorkspaceResourceId: law.id // same workspace (and the same 0.1 GB/day cap)
+    IngestionMode: 'LogAnalytics'
+    DisableLocalAuth: true // telemetry must be sent with an Entra token (managed identity)
+  }
+}
+
+resource agentAppiPublisher 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deployApps) {
+  scope: appi
+  name: guid(appi.id, roles.monitoringMetricsPublisher, 'agent')
+  properties: {
+    principalId: agentIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.monitoringMetricsPublisher)
+  }
+}
+
+resource cae 'Microsoft.App/managedEnvironments@2024-03-01' = if (deployApps) {
+  name: 'cae-${prefix}-${suffix}'
+  location: location
+  tags: tags
+  properties: {
+    appLogsConfiguration: {
+      destination: 'log-analytics'
+      logAnalyticsConfiguration: {
+        customerId: law.properties.customerId
+        sharedKey: law.listKeys().primarySharedKey // resolved inside ARM at deploy time; never in the repo or outputs
+      }
+    }
+    workloadProfiles: [
+      {
+        name: 'Consumption'
+        workloadProfileType: 'Consumption'
+      }
+    ]
+  }
+}
+
+var apiEnv = [
+  { name: 'AZURE_CLIENT_ID', value: agentIdentity.properties.clientId } // DefaultAzureCredential -> this identity
+  { name: 'SRE_LLM_PROVIDER', value: 'azure_openai' }
+  { name: 'SRE_CHAT_MODEL', value: chatDeployment }
+  { name: 'SRE_EMBEDDING_MODEL', value: embeddingDeployment }
+  { name: 'SRE_AZURE_OPENAI_ENDPOINT', value: openai.properties.endpoint }
+  { name: 'SRE_RETRIEVER_BACKEND', value: 'azure_search' }
+  { name: 'SRE_AZURE_SEARCH_ENDPOINT', value: 'https://${search.name}.search.windows.net' }
+  { name: 'SRE_AZURE_SEARCH_RERANK', value: semanticSearch == 'free' ? 'semantic' : 'none' }
+  { name: 'SRE_RERANKER_MODEL', value: '' } // no local ONNX model in the cloud image path
+  { name: 'SRE_TELEMETRY_BACKEND', value: 'azure_monitor' }
+  { name: 'SRE_LOG_ANALYTICS_WORKSPACE_ID', value: law.properties.customerId }
+  { name: 'SRE_KEY_VAULT_URL', value: kv.properties.vaultUri }
+  { name: 'SRE_ENTRA_TENANT_ID', value: subscription().tenantId }
+  { name: 'SRE_API_AUDIENCE', value: apiAudience }
+  { name: 'SRE_APPINSIGHTS_CONNECTION_STRING', value: deployApps ? appi!.properties.ConnectionString : '' }
+  { name: 'SRE_SPEND_LIMIT_USD', value: '0.30' } // per replica lifetime; Azure budget + TPM quota are the global limits
+  { name: 'SRE_API_RATE_PER_MINUTE', value: '4' }
+]
+
+resource api 'Microsoft.App/containerApps@2024-03-01' = if (deployApps) {
+  name: 'ca-${prefix}-agent-api'
+  location: location
+  tags: tags
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${agentIdentity.id}': {}
+    }
+  }
+  properties: {
+    managedEnvironmentId: cae.id
+    workloadProfileName: 'Consumption'
+    configuration: {
+      activeRevisionsMode: 'Single'
+      ingress: {
+        external: true
+        targetPort: 8000
+        transport: 'auto'
+        allowInsecure: false // HTTPS only (managed certificate on *.azurecontainerapps.io)
+      }
+      registries: [
+        {
+          server: acr!.properties.loginServer
+          identity: agentIdentity.id
+        }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'api'
+          image: '${acr!.properties.loginServer}/sre-agent-api:${imageTag}'
+          resources: {
+            cpu: json('1.0')
+            memory: '2Gi'
+          }
+          env: apiEnv
+          probes: [
+            {
+              type: 'Startup' // spaCy + MCP subprocess + tool discovery take a while on a cold start
+              httpGet: { path: '/readyz', port: 8000 }
+              periodSeconds: 5
+              failureThreshold: 36
+            }
+            {
+              type: 'Liveness'
+              httpGet: { path: '/healthz', port: 8000 }
+              periodSeconds: 30
+            }
+            {
+              type: 'Readiness'
+              httpGet: { path: '/readyz', port: 8000 }
+              periodSeconds: 10
+            }
+          ]
+        }
+      ]
+      scale: {
+        minReplicas: 0 // scale to zero: no requests, no compute bill
+        maxReplicas: 1 // in-memory threads/approvals + per-replica rate limit (see docs/learning/08-production.md)
+        rules: [
+          {
+            name: 'http'
+            http: {
+              metadata: {
+                concurrentRequests: '10'
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+  dependsOn: [agentAcrPull, agentAppiPublisher, kvRoles, searchRoles, lawRoles, agentOpenAiUser]
+}
+
 output searchEndpoint string = 'https://${search.name}.search.windows.net'
 output logAnalyticsWorkspaceId string = law.properties.customerId // the GUID the query API wants
 output keyVaultUri string = kv.properties.vaultUri
@@ -273,6 +446,5 @@ output logsIngestion object = {
   endpoint: dcr.properties.endpoints.logsIngestion
   ruleId: dcr.properties.immutableId
 }
-// Phase 8 (Container Apps + registry)
-output registryLoginServer string = ''
-output agentApiUrl string = ''
+output registryLoginServer string = withRegistry ? acr!.properties.loginServer : ''
+output agentApiUrl string = deployApps ? 'https://${api!.properties.configuration.ingress.fqdn}' : ''

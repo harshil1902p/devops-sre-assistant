@@ -1,0 +1,8 @@
+# Allowlist: only what the image needs. Secrets (.env*), local state and history never enter the build context.
+*
+!pyproject.toml
+!uv.lock
+!README.md
+!src/
+!data/corpus/
+src/**/__pycache__

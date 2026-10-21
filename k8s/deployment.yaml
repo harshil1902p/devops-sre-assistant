@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sre-agent-api
+  namespace: sre-assistant
+  labels: {app.kubernetes.io/name: sre-agent-api}
+spec:
+  replicas: 1   # >1 needs the Postgres checkpointer + a shared rate limiter (see docs/learning/08-production.md)
+  selector:
+    matchLabels: {app.kubernetes.io/name: sre-agent-api}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sre-agent-api
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: sre-agent
+      automountServiceAccountToken: true   # needed: the Kubernetes backend calls the API server
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: api
+          image: sre-agent-api
+          ports: [{containerPort: 8000, name: http}]
+          env:
+            - {name: SRE_TELEMETRY_BACKEND, value: kubernetes}
+            - {name: SRE_TELEMETRY_BACKEND_KUBERNETES_NAMESPACE, value: staging}
+            - {name: SRE_LLM_PROVIDER, value: azure_openai}
+            - {name: SRE_RETRIEVER_BACKEND, value: azure_search}
+            - {name: SRE_AZURE_SEARCH_RERANK, value: semantic}
+            - {name: SRE_RERANKER_MODEL, value: ""}
+          envFrom:
+            - configMapRef: {name: sre-agent-config}   # endpoints, tenant, audience (no secrets; those come from Key Vault)
+          resources:
+            requests: {cpu: 250m, memory: 1Gi}
+            limits: {memory: 2Gi}   # memory limit = OOMKill guard; no CPU limit avoids throttling latency
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts: [{name: tmp, mountPath: /tmp}]
+          startupProbe: {httpGet: {path: /readyz, port: http}, periodSeconds: 5, failureThreshold: 36}
+          readinessProbe: {httpGet: {path: /readyz, port: http}, periodSeconds: 10}
+          livenessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 30}
+      volumes:
+        - {name: tmp, emptyDir: {sizeLimit: 512Mi}}

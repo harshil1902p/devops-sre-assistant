@@ -11,7 +11,6 @@ import argparse
 import asyncio
 import getpass
 import json
-import os
 import sys
 import time
 import uuid
@@ -22,10 +21,10 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.types import Command
 from mcp.client import Client
-from mcp.client.stdio import StdioServerParameters, get_default_environment
+from mcp.client.stdio import StdioServerParameters
 
 from sre_assistant.agent.graph import build_graph, usage_summary
-from sre_assistant.agent.mcp_tools import load_mcp_tools
+from sre_assistant.agent.mcp_tools import load_mcp_tools, mcp_subprocess_env
 from sre_assistant.config import get_settings
 from sre_assistant.llm import get_chat_model
 from sre_assistant.llm.providers import get_ledger
@@ -82,7 +81,7 @@ async def run(question: str, thread: str, service: str | None, since: int, use_m
     s = get_settings()
     # The MCP SDK passes only a minimal, safe env to stdio servers; forward our own SRE_* settings explicitly
     # (e.g. SRE_TELEMETRY_BACKEND=azure_monitor), nothing else from the parent environment.
-    env = get_default_environment() | {k: v for k, v in os.environ.items() if k.startswith("SRE_")}
+    env = mcp_subprocess_env()
     params = StdioServerParameters(
         command=sys.executable, args=["-m", "sre_assistant.mcp_server"], cwd=str(ROOT), env=env
     )

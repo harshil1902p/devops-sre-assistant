@@ -77,11 +77,22 @@ class Settings(BaseSettings):
     azure_search_rerank: Literal["cross_encoder", "semantic", "none"] = Field(
         "cross_encoder", description="semantic = Azure semantic ranker (free plan: 1,000 queries/month)"
     )
-    telemetry_backend: Literal["docker", "azure_monitor"] = "docker"
+    telemetry_backend: Literal["docker", "azure_monitor", "kubernetes"] = "docker"
     log_analytics_workspace_id: str | None = None
     logs_ingestion_endpoint: str | None = None
     logs_ingestion_rule_id: str | None = None
     key_vault_url: str | None = Field(None, description="if set, missing secrets are loaded from Key Vault")
+
+    # --- Agent API (Phase 8) ---
+    api_auth: Literal["entra", "disabled"] = Field("entra", description="disabled = local development only")
+    entra_tenant_id: str | None = None
+    api_audience: str | None = Field(None, description="Entra app id URI or client id the tokens are issued for")
+    api_rate_per_minute: int = Field(6, ge=1, description="diagnoses per principal per minute (token bucket)")
+    api_max_concurrent: int = Field(4, ge=1, description="agent runs in flight per replica")
+    approval_four_eyes: bool = Field(True, description="the requester of an action cannot approve it")
+    checkpointer: Literal["memory", "postgres"] = "memory"
+    telemetry_backend_kubernetes_namespace: str | None = Field(None, description="namespace for the k8s backend")
+    appinsights_connection_string: str | None = Field(None, description="enables OpenTelemetry export")
 
     @property
     def effective_chat_provider(self) -> str:
@@ -100,6 +111,8 @@ class Settings(BaseSettings):
             raise ValueError("SRE_AZURE_SEARCH_ENDPOINT is required when SRE_RETRIEVER_BACKEND=azure_search")
         if self.telemetry_backend == "azure_monitor" and not self.log_analytics_workspace_id:
             raise ValueError("SRE_LOG_ANALYTICS_WORKSPACE_ID is required when SRE_TELEMETRY_BACKEND=azure_monitor")
+        if self.api_auth == "entra" and self.entra_tenant_id and not self.api_audience:
+            raise ValueError("SRE_API_AUDIENCE is required with SRE_API_AUTH=entra")
         return self
 
 

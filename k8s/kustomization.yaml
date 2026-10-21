@@ -1,0 +1,15 @@
+# kubectl apply -k k8s/   (AKS or any cluster; see docs/learning/08-production.md)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: sre-assistant
+resources:
+  - namespace.yaml
+  - rbac.yaml
+  - deployment.yaml
+  - service.yaml
+  - networkpolicy.yaml
+  - pdb.yaml
+images:
+  - name: sre-agent-api
+    newName: acrsre5djse3.azurecr.io/sre-agent-api   # replace with your registry
+    newTag: latest

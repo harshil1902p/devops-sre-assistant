@@ -1,0 +1,14 @@
+# Default deny ingress; only the ingress controller may reach the API. Egress stays open to Azure endpoints
+# (restrict further with an egress firewall / FQDN policies in a real environment).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sre-agent-api
+  namespace: sre-assistant
+spec:
+  podSelector: {matchLabels: {app.kubernetes.io/name: sre-agent-api}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}
+      ports: [{port: 8000}]

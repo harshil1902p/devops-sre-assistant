@@ -19,7 +19,7 @@ This folder is your study guide for the project. Each phase has one file with th
 | 5 | Guardrails | [05-guardrails.md](05-guardrails.md) | Redaction vs pseudonymisation, Luhn, NER + fairness gap, injection defence in depth, capability control, interrupt()/HITL, signed approvals, output policy |
 | 6 | Evaluation | [06-evaluation.md](06-evaluation.md) | Replay vs live evals, golden set + adversarial cases, deterministic metrics vs LLM-as-a-Judge (G-Eval), judge bias & calibration, thresholds before results, 429/TPM, CI gate |
 | 7 | Azure | [07-azure.md](07-azure.md) | Ports & adapters, AI Search hybrid (server-side RRF) + semantic ranker, denormalised index, OData/KQL injection, Logs Ingestion API + DCR, edge redaction, ingestion latency & staleness, managed identity, GitHub OIDC federation, Key Vault, cost caps |
-| 8 | Production | *(next)* | AuthN/Z, OpenTelemetry, cost/token tracking, scaling, AKS |
+| 8 | Production | [08-production.md](08-production.md) | Entra ID JWT + app roles, ownership & four-eyes, rate limiting, SSE, OpenTelemetry → App Insights, container hardening, Container Apps probes/scale-to-zero, managed-identity env bug, read-only Kubernetes backend & RBAC, teardown, **final resume bullets** |
 
 Also see [skills-map.md](skills-map.md) for how the project maps to the Senior AI Engineer job description.
 

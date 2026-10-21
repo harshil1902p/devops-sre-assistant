@@ -39,6 +39,10 @@ def main() -> None:
         from sre_assistant.mcp_server.backends.azure_monitor import AzureMonitorBackend
 
         backend = AzureMonitorBackend(s.log_analytics_workspace_id)
+    elif s.telemetry_backend == "kubernetes":
+        from sre_assistant.mcp_server.backends.kubernetes_backend import KubernetesBackend
+
+        backend = KubernetesBackend(s.telemetry_backend_kubernetes_namespace or "default")
     else:
         backend = DockerBackend(s.docker_host, event_store_dsn=s.database_url.get_secret_value())
     server = build_server(backend, retriever_factory, CORPUS, s)

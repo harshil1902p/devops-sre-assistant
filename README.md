@@ -29,7 +29,7 @@ An AI production companion that diagnoses crashes, server errors and infrastruct
 | 5 | Guardrails: secrets + PII pseudonymisation (regex, Luhn, spaCy NER), injection defence in depth, HITL remediation with signed approvals | ✅ |
 | 6 | Evaluation: replayed telemetry, 21-case golden set (incl. adversarial), deterministic metrics, DeepEval G-Eval judge, CI quality gate | ✅ |
 | 7 | Azure: AI Search hybrid + semantic ranker, Azure Monitor (log shipper, DCR, KQL backend), Key Vault, managed identity, GitHub OIDC cloud evals, Bicep | ✅ |
-| 8 | Production: agent API + auth, Container Apps, OpenTelemetry, cost tracking, Kubernetes | ⏳ |
+| 8 | Production: FastAPI (Entra ID app roles, four-eyes approvals, rate limit, SSE), OpenTelemetry → App Insights, hardened container on Container Apps, read-only Kubernetes backend + manifests, teardown | ✅ |
 
 ## Retrieval benchmark (34 hand-written queries, 51 docs, nomic-embed-text, CPU)
 
@@ -98,6 +98,26 @@ SRE_TELEMETRY_BACKEND=azure_monitor SRE_RETRIEVER_BACKEND=azure_search uv run py
 ```
 
 Learning notes and interview prep for each phase live in [docs/learning](docs/learning).
+
+## Production API (Phase 8)
+
+```bash
+# local, no auth (development only)
+SRE_API_AUTH=disabled uv run uvicorn sre_assistant.api.app:app --port 8000
+curl -N -X POST localhost:8000/v1/diagnose -H 'content-type: application/json' -H 'accept: text/event-stream' \
+  -d '{"question": "auth-service is returning 500s"}'
+
+# Azure: Entra app (roles SRE.Diagnose / SRE.Approve), registry, image, Container Apps
+uv run python scripts/setup_entra_app.py                       # prints the app (client) id
+az deployment sub create ... -p deployRegistry=true            # then: docker build/push to the registry
+az deployment sub create ... -p deployRegistry=true deployApps=true imageTag=<tag> apiAudience=api://<app id>
+TOKEN=$(az account get-access-token --resource api://<app id> --query accessToken -o tsv)
+curl -X POST https://<app>.azurecontainerapps.io/v1/diagnose -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' -d '{"question": "..."}'
+
+scripts/teardown.sh apps    # stop everything hourly-priced (registry, Container Apps, App Insights)
+```
+
+Kubernetes: `kubectl apply -k k8s/` (read-only RBAC, Pod Security `restricted`, Workload Identity). Details: [docs/learning/08-production.md](docs/learning/08-production.md).
 
 ## Security notes
 

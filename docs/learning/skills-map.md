@@ -9,7 +9,7 @@
 | LLM API integration & prompt engineering | Phases 0, 4, 7: provider abstraction, system prompts, structured outputs, Azure OpenAI |
 | RAG systems: vector DBs, embeddings, retrieval strategies | Phase 2: pgvector, parent-child chunking, hybrid BM25 + vector with RRF. Phase 7: Azure AI Search hybrid + semantic ranker (1.00 hit@1) |
 | .NET/C#, Python, SQL, Git, CI/CD | Python + SQL (pgvector/tsvector) throughout; GitHub Actions in Phase 6; C# from your RBC work |
-| Cloud + containers | Docker/Compose (Phase 1+), Azure Container Apps and AKS (Phases 7–8) |
+| Cloud + containers | Docker/Compose (Phase 1+), Azure AI Search / Monitor / Key Vault / managed identity (Phase 7), hardened image on Azure Container Apps + AKS-ready manifests with read-only RBAC (Phase 8) |
 | Security, data governance, responsible AI | Phase 5: redaction, read-only tools, human approval, audit log. Phase 7: Managed Identity, Key Vault |
 | Model evaluation & governance frameworks | Phase 6: golden set, retrieval metrics, DeepEval LLM-as-a-Judge, CI quality gate |
 
@@ -37,3 +37,4 @@
 | Leakage prevention | Share of planted secrets/IPs masked by the redaction pipeline | 100% (Phase 5: secrets + structured identifiers **1.00**, person names **0.88**) |
 
 Only put a number on your resume after you have measured it. Keep the raw results in `eval/results/`.
+Final measured numbers and suggested bullets: [08-production.md](08-production.md#final-measured-numbers-for-your-resume).

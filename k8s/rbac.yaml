@@ -1,0 +1,38 @@
+# The agent's identity inside the cluster. Read-only, and only for the namespace it watches (here: staging).
+# No secrets, no exec, no writes: a prompt-injected or buggy agent cannot change the cluster.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sre-agent
+  namespace: sre-assistant
+  annotations:
+    azure.workload.identity/client-id: "<agent managed identity client id>"   # AKS Workload Identity -> Azure RBAC
+  labels:
+    azure.workload.identity/use: "true"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sre-agent-reader
+  namespace: staging
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sre-agent-reader
+  namespace: staging
+subjects:
+  - kind: ServiceAccount
+    name: sre-agent
+    namespace: sre-assistant
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: sre-agent-reader
