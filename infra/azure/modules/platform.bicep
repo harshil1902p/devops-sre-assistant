@@ -20,6 +20,10 @@ param githubRepo string
 @description('GitHub environment the federated credential is bound to (protect it with required reviewers)')
 param githubEnvironment string = 'cloud-eval'
 
+@description('''Exact OIDC subject GitHub presents. Newer repos use immutable ids: repo:OWNER@OWNER_ID/REPO@REPO_ID:...
+(defends against a deleted repo/owner name being re-registered). Empty = legacy name-based subject.''')
+param githubOidcSubject string = ''
+
 @description('Semantic ranker plan: free = 1,000 queries/month at no cost')
 @allowed(['disabled', 'free'])
 param semanticSearch string = 'free'
@@ -51,7 +55,7 @@ resource githubFederation 'Microsoft.ManagedIdentity/userAssignedIdentities/fede
   name: 'github-${githubEnvironment}'
   properties: {
     issuer: 'https://token.actions.githubusercontent.com'
-    subject: 'repo:${githubRepo}:environment:${githubEnvironment}' // only jobs in this environment of this repo
+    subject: empty(githubOidcSubject) ? 'repo:${githubRepo}:environment:${githubEnvironment}' : githubOidcSubject
     audiences: ['api://AzureADTokenExchange']
   }
 }

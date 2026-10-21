@@ -11,6 +11,7 @@ param deployPlatform bool
 param deployApps bool
 param imageTag string
 param githubRepo string
+param githubOidcSubject string
 
 // Built-in role definition ids (stable GUIDs)
 var roles = {
@@ -94,6 +95,7 @@ module platform 'platform.bicep' = if (deployPlatform) {
     deployApps: deployApps
     imageTag: imageTag
     githubRepo: githubRepo
+    githubOidcSubject: githubOidcSubject
   }
 }
 

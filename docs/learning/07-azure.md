@@ -118,6 +118,12 @@ End-to-end run (pool exhaustion injected locally, shipped, diagnosed from Azure)
   (`repo:harshil1902p/devops-sre-assistant:environment:cloud-eval`) match. No client secret stored in GitHub. The environment
   has a required reviewer, so a run needs a human click. What's stored in GitHub (client/tenant/subscription ids) are
   identifiers, not credentials.
+- **Lesson from the first run**: login failed with `AADSTS700213: No matching federated identity record`. GitHub presented the
+  newer **immutable-id subject** `repo:harshil1902p@336735813/devops-sre-assistant@1427612424:environment:cloud-eval`, while we
+  had registered the name-based `repo:harshil1902p/devops-sre-assistant:environment:cloud-eval`. Matching is exact string
+  comparison. Immutable ids are *more* secure: if an owner or repo is deleted and the name re-registered by someone else, the
+  ids differ, so the trust doesn't transfer. Fix: `githubOidcSubject` parameter in Bicep; debug by reading the
+  "subject claim" that `azure/login` prints. Second run: OIDC login, 2 golden cases on Azure AI Search, coverage 1.0, $0.013.
 - Role design: humans get *Contributor-style data roles* where they build things; the agent gets only `*Reader` / `*User` roles.
 
 ## 5. Key Vault
@@ -188,7 +194,7 @@ write the streams that DCR declares.
 <details><summary>Model answer</summary>
 
 Tokens issued by `https://token.actions.githubusercontent.com`, audience `api://AzureADTokenExchange`, subject
-`repo:harshil1902p/devops-sre-assistant:environment:cloud-eval`. A fork, another branch's job without that environment, or another
+`repo:harshil1902p@336735813/devops-sre-assistant@1427612424:environment:cloud-eval` (immutable owner/repo ids). A fork, another branch's job without that environment, or another
 repo can't get a token, and the environment has a required reviewer.
 </details>
 

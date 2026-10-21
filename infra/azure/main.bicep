@@ -51,6 +51,9 @@ param imageTag string = 'latest'
 @description('GitHub repo (owner/name) allowed to federate into the agent identity (OIDC)')
 param githubRepo string = ''
 
+@description('Exact GitHub OIDC subject (immutable-id format); empty = repo:OWNER/REPO:environment:cloud-eval')
+param githubOidcSubject string = ''
+
 var suffix = take(uniqueString(subscription().id, prefix, location), 6)
 var tags = {
   project: 'devops-sre-assistant'
@@ -114,6 +117,7 @@ module workload 'modules/workload.bicep' = {
     deployApps: deployApps
     imageTag: imageTag
     githubRepo: githubRepo
+    githubOidcSubject: githubOidcSubject
   }
 }
 
