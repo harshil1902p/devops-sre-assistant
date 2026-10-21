@@ -181,3 +181,24 @@ async def test_coverage_guard_reminds_about_uninvestigated_window():
     reminder = [m for m in model.prompts[2] if "Not yet investigated" in str(m.content)]
     assert reminder and "error burst" in reminder[0].content
     assert result["search_queries"] == ["disk full", "redis.exceptions.TimeoutError Timeout reading"]
+
+
+async def test_healthy_service_needs_no_runbook_search():
+    class HealthyBackend(FakeBackend):
+        def get_logs(self, service, tail, since_minutes=None):
+            return [__import__("json").dumps({"level": "INFO", "msg": "GET /x 200"})] * 5
+
+        def get_events(self, service, since_minutes):
+            return []
+
+    server = build_server(
+        HealthyBackend(), FakeRetriever, CORPUS, Settings(_env_file=None, mcp_audit_log=None, pii_ner=False)
+    )
+    model = ScriptedChatModel([AIMessage("READY"), diag(status="healthy", citations=[])])
+    async with Client(server) as client:
+        graph = build_graph(model, await load_mcp_tools(client), checkpointer=InMemorySaver())
+        result = await graph.ainvoke(
+            {"messages": [HumanMessage("is auth-service ok?")]}, {"configurable": {"thread_id": "h"}}
+        )
+    assert "search_runbooks" not in result["tools_used"], "no forced search without an incident"
+    assert result["grounding"]["warnings"] == []

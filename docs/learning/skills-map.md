@@ -31,9 +31,9 @@
 | KPI | How it's measured | Target |
 |---|---|---|
 | MTTR reduction | Time 10 incidents diagnosed by hand vs with the assistant | 75–80% |
-| Retrieval quality | recall@5 / MRR: is the correct runbook in the top 5 results? | 90%+ |
-| Faithfulness | DeepEval LLM-as-a-Judge over the golden set | 90%+ |
+| Retrieval quality | recall@5 / MRR: is the correct runbook in the top 5 results? | 90%+ (Phase 2: **1.00 hit@1**; Phase 6 agent: retrieval coverage **1.00**, citation precision **1.00**, 0 hallucinated citations over 21 cases) |
+| Faithfulness | DeepEval LLM-as-a-Judge over the golden set | 90%+ (Phase 6: groundedness **1.00**, correctness **0.94**, 21 cases) |
 | Token cost | Tokens per diagnosis, naive chunking vs parent-child | ~30% fewer (Phase 2 measured: **11% fewer** tokens at higher fix coverage, 1.00 vs 0.94, on short docs) |
-| Leakage prevention | Share of planted secrets/IPs masked by the redaction pipeline | 100% |
+| Leakage prevention | Share of planted secrets/IPs masked by the redaction pipeline | 100% (Phase 5: secrets + structured identifiers **1.00**, person names **0.88**) |
 
 Only put a number on your resume after you have measured it. Keep the raw results in `eval/results/`.

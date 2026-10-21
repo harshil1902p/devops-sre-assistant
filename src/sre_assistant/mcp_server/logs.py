@@ -28,7 +28,12 @@ _PLAIN_LEVEL = re.compile(
     r"\b(DEBUG|INFO|NOTICE|LOG|WARN(?:ING)?|ERROR|ERR|FATAL|PANIC|CRITICAL|SEVERE|TRACE|STATEMENT|DETAIL|HINT)\b"
 )
 _PLAIN_TS = re.compile(r"^(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2}| UTC)?)")
-_EXC_IN_TEXT = re.compile(r"\b((?:[a-z_][\w]*\.)*[A-Z]\w*(?:Error|Exception|Exceeded|Detected|Killed))\b:?\s*(.*)")
+# Prefix optional so bare "Error: connect ECONNREFUSED" (Node.js style) is recognised as well as "redis.TimeoutError".
+_EXC_IN_TEXT = re.compile(r"\b((?:[a-z_][\w]*\.)*(?:[A-Z]\w*)?(?:Error|Exception|Exceeded|Detected|Killed))\b:\s*(.*)")
+_NGINX_LEVEL = re.compile(r"\[(emerg|alert|crit|error|warn|notice|info|debug)\]")
+# Kubernetes event lines ("Warning  Failed  kubelet  ...") - the Warning type is how K8s reports problems.
+_K8S_EVENT = re.compile(r"^\s*(Warning|Normal)\s{2,}\w+")
+_NGINX_MAP = {"emerg": "CRITICAL", "alert": "CRITICAL", "crit": "CRITICAL", "error": "ERROR", "warn": "WARNING"}
 
 _NORMALISERS = [
     (re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.I), "<uuid>"),
@@ -73,12 +78,17 @@ def parse_line(raw: str) -> LogLine:
             )  # fmt: skip
         except (json.JSONDecodeError, AttributeError):
             pass
-    m = _PLAIN_LEVEL.search(raw)
     ts = _PLAIN_TS.match(raw)
-    line = LogLine(
-        raw=raw, level=normalise_level(m.group(1) if m else None), ts=ts.group(1) if ts else None, message=raw
-    )
-    if exc := _EXC_IN_TEXT.search(raw):
+    message = raw[ts.end() :].strip() if ts else raw  # the timestamp is metadata, not part of the message
+    if (k8s := _K8S_EVENT.match(message)) and k8s.group(1) == "Warning":
+        level = "ERROR"  # a K8s Warning event (Failed, BackOff, Unhealthy, Killing) is the problem signal
+    elif nginx := _NGINX_LEVEL.search(message):
+        level = _NGINX_MAP.get(nginx.group(1), "INFO")
+    else:
+        m = _PLAIN_LEVEL.search(message)
+        level = normalise_level(m.group(1) if m else None)
+    line = LogLine(raw=raw, level=level, ts=ts.group(1) if ts else None, message=message)
+    if exc := _EXC_IN_TEXT.search(message):
         line.exc_type, line.exc_message = exc.group(1), exc.group(2)[:300] or None
     return line
 

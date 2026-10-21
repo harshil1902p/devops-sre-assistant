@@ -27,7 +27,7 @@ An AI production companion that diagnoses crashes, server errors and infrastruct
 | 3 | MCP server (6 read-only tools, resource, prompt; stdio + streamable HTTP), event collector, socket proxy | ✅ |
 | 4 | LangGraph agent (workflow + ReAct), Azure OpenAI keyless, memory, guards, grounding, spend cap | ✅ |
 | 5 | Guardrails: secrets + PII pseudonymisation (regex, Luhn, spaCy NER), injection defence in depth, HITL remediation with signed approvals | ✅ |
-| 6 | Evaluation: golden set, retrieval metrics, DeepEval LLM-as-a-Judge, CI gate | ⏳ |
+| 6 | Evaluation: replayed telemetry, 21-case golden set (incl. adversarial), deterministic metrics, DeepEval G-Eval judge, CI quality gate | ✅ |
 | 7 | Azure: Azure OpenAI, AI Search, Monitor/KQL, Key Vault, Managed Identity, Container Apps, Bicep | ⏳ |
 | 8 | Production hardening: API + auth, OpenTelemetry, cost tracking, AKS | ⏳ |
 
@@ -41,6 +41,21 @@ An AI production companion that diagnoses crashes, server errors and infrastruct
 | **parent-child, hybrid + cross-encoder rerank, top 2** | **1.00** | **1.00** | **1003** | 995 ms |
 
 Saturated scores mean this query set is too easy; Phase 6 builds a harder golden set. Raw results: `eval/results/retrieval.json`.
+
+## Agent evaluation (21 golden cases, replayed telemetry, gpt-4.1-mini)
+
+17 single-incident cases (one per failure scenario) + 4 adversarial: overlapping incidents, healthy service, prompt injection in logs, novel error.
+
+| Metric | Result | Gate |
+|---|---|---|
+| Retrieval coverage / cited primary / citation precision | 1.00 / 1.00 / 1.00 | ≥ 0.90 / 0.85 / 0.80 |
+| Hallucinated citations · unsafe unlabelled actions | 0 · 0 | = 0 |
+| Injection flagged / resisted · both overlapping incidents covered | 1.00 / 1.00 · 1.00 | = 1.0 |
+| **Correctness** (G-Eval vs reference) · **groundedness** (G-Eval vs tool context) | **0.94 · 1.00** | ≥ 0.70 · 0.75 |
+| Median time per diagnosis · cost per diagnosis | 12.2 s · ≈ $0.0075 | ≤ 45 s |
+
+CI enforces `eval/thresholds.yaml` on the committed results (`scripts/eval_gate.py`); running the evals costs tokens, so it's on demand.
+Details, judge caveats and lessons: [docs/learning/06-evaluation.md](docs/learning/06-evaluation.md).
 
 ## Quick start (local, free)
 
@@ -65,6 +80,11 @@ uv run python scripts/ingest.py                 # incremental; --reset to rebuil
 uv run python scripts/search.py "QueuePool limit of size 10 overflow 20 reached"
 uv run python scripts/retrieval_benchmark.py
 uv run pytest -m integration                    # live checks against the demo stack
+
+# Evaluation (needs Azure OpenAI configured in .env; ~$0.19 per full run, capped by SRE_SPEND_LIMIT_USD)
+uv run python scripts/run_evals.py --no-judge --limit 3   # quick smoke
+uv run python scripts/run_evals.py                        # full golden set + LLM judge
+uv run python scripts/eval_gate.py                        # free: thresholds check
 ```
 
 Learning notes and interview prep for each phase live in [docs/learning](docs/learning).

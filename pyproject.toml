@@ -24,6 +24,7 @@ dependencies = [
     "tiktoken>=0.8",
     "spacy>=3.8,<3.9",
     "en-core-web-sm",
+    "deepeval>=3.0",
 ]
 
 [dependency-groups]
@@ -44,7 +45,8 @@ testpaths = ["tests"]
 markers = [
     "integration: needs live services (Ollama, Postgres, Docker)",
 ]
-addopts = "-m 'not integration'"
+# -p no:deepeval: deepeval's pytest plugin imports deepeval, which copies .env into os.environ (test leakage).
+addopts = "-m 'not integration' -p no:deepeval"
 
 [tool.ruff]
 line-length = 120
@@ -62,6 +64,9 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 # Regex pattern tables are easier to review one pattern per line.
 "src/sre_assistant/guardrails/injection.py" = ["E501"]
 "src/sre_assistant/guardrails/policy.py" = ["E501"]
+# Eval case definitions and report formatting are data/presentation heavy.
+"src/sre_assistant/evals/cases.py" = ["E501"]
+"scripts/run_evals.py" = ["E501", "E731"]
 
 [tool.uv.sources]
 en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }

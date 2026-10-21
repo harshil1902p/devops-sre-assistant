@@ -30,7 +30,7 @@ param budgetStartDate string = '${utcNow('yyyy-MM')}-01'
 param chatModel object = {
   name: 'gpt-4.1-mini'
   version: '2025-04-14'
-  capacity: 50 // thousands of tokens per minute (TPM)
+  capacity: 150 // thousands of tokens per minute (TPM); quota is 200k. Raised from 50 after eval runs hit 429s
 }
 
 @description('Embedding model deployment')

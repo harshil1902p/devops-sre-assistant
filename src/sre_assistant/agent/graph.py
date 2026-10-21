@@ -67,6 +67,12 @@ class Intake(BaseModel):
     since_minutes: int = Field(description="how far back to look, 5-240; default 30")
 
 
+def _has_incident(state: "AgentState") -> bool:
+    """A runbook search is mandatory only when triage found something to investigate (eval finding: forcing a
+    search on a healthy service made the model cite an irrelevant runbook)."""
+    return any(w.get("needs_investigation") for w in state.get("windows", []))
+
+
 def _usage(node: str, msg: AIMessage | None, started: float) -> dict:
     u = (msg.usage_metadata if msg is not None else None) or {}
     return {"node": node, "input_tokens": u.get("input_tokens", 0), "output_tokens": u.get("output_tokens", 0),
@@ -213,7 +219,8 @@ def build_graph(model: BaseChatModel, tools: list[BaseTool], checkpointer=None, 
             err = out.get("parsing_error")
             return {"messages": [AIMessage(f"Could not produce a structured diagnosis: {err}")],
                     "llm_calls": [_usage("respond", out.get("raw"), t)]}  # fmt: skip
-        g = check_grounding(d, set(state.get("retrieved_doc_ids", [])), set(state.get("tools_used", [])))
+        g = check_grounding(d, set(state.get("retrieved_doc_ids", [])), set(state.get("tools_used", [])),
+                            search_required=_has_incident(state))  # fmt: skip
         mitigation, f1 = policy.enforce(d.immediate_mitigation)
         fix, f2 = policy.enforce(d.permanent_fix)
         g = g.model_copy(update={"policy_flags": f1 + f2, "security_flags": state.get("security_flags", [])})
@@ -275,9 +282,14 @@ def build_graph(model: BaseChatModel, tools: list[BaseTool], checkpointer=None, 
         ready = str(last.content).strip().upper().startswith("READY")
         if state.get("followup") and not ready:
             return "finish_followup"  # prose answer to a follow-up question
-        if not state.get("reminded") and (
-            "search_runbooks" not in state.get("tools_used", [])
-            or uncovered_windows(state.get("windows", []), state.get("search_queries", []))
+        significant = _has_incident(state)
+        if (
+            not state.get("reminded")
+            and significant
+            and (
+                "search_runbooks" not in state.get("tools_used", [])
+                or uncovered_windows(state.get("windows", []), state.get("search_queries", []))
+            )
         ):
             return "remind"  # coverage guard: every significant incident window must be investigated
         return "respond"

@@ -52,16 +52,18 @@ class GroundingReport(BaseModel):
 _DOC_ID = re.compile(r"\b(?:RB|PM|KB)-[A-Z0-9]+(?:-[A-Z0-9]+)*\b")
 
 
-def check_grounding(d: Diagnosis, retrieved_doc_ids: set[str], tools_used: set[str]) -> GroundingReport:
+def check_grounding(
+    d: Diagnosis, retrieved_doc_ids: set[str], tools_used: set[str], search_required: bool = True
+) -> GroundingReport:
     valid, invalid, warnings = [], [], []
     for c in d.citations:
         ids = _DOC_ID.findall(c)
         (valid if ids and all(i in retrieved_doc_ids for i in ids) else invalid).append(c)
     if invalid:
         warnings.append(f"removed {len(invalid)} citation(s) not returned by search_runbooks: {invalid}")
-    if retrieved_doc_ids and not valid:
+    if search_required and retrieved_doc_ids and not valid:
         warnings.append("runbooks were retrieved but none were cited")
-    if "search_runbooks" not in tools_used:
+    if search_required and "search_runbooks" not in tools_used:
         warnings.append("no runbook search was performed; answer is not grounded in institutional knowledge")
     if not d.evidence:
         warnings.append("no evidence quoted from live tools")
