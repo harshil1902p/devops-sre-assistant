@@ -9,6 +9,8 @@ This folder is your study guide for the project. Each phase has one file with th
 
 ## Phases
 
+Big-picture overview first: [../ARCHITECTURE.md](../ARCHITECTURE.md).
+
 | # | Topic | Notes | Key concepts |
 |---|---|---|---|
 | 0 | Foundations | [00-foundations.md](00-foundations.md) | 12-factor config, provider abstraction, embeddings & cosine similarity, temperature, local vs hosted LLMs |

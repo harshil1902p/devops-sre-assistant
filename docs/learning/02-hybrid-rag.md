@@ -30,7 +30,7 @@ uv run pytest && uv run pytest -m integration
 query ─┬─▶ embed (nomic, "search_query:" prefix) ─▶ pgvector HNSW cosine top-20 child chunks ─┐
        └─▶ tsvector query (rare terms only, OR'ed) ─▶ GIN full-text top-20 child chunks ───────┴─▶ RRF (k=60)
    ─▶ cross-encoder scores top-30 fused children ─▶ group children by parent ─▶ top-2/3 parents (whole docs)
-   ─▶ <source id="RB-AUTH-DB-POOL § Example Log Output"> … </source>  (citable context for the LLM)
+   ─▶ <source id="[RB-AUTH-DB-POOL] Example Log Output"> … </source>  (citable context for the LLM)
 ```
 
 ---
@@ -53,7 +53,7 @@ With 300-token children, each child swallowed its whole section: **391 parents =
 - **Child** = a block packed to ≤ **128 tokens**, prefixed with `"<doc title> | <section>"`. Small, so a match is precise (one error log, one fix bullet).
 - **Parent** = the **whole document** if it is ≤ 1,500 tokens, otherwise one `##` section.
   Why? A query matches *symptoms or error signatures*, but the answer is in *Root Cause / Permanent Fix*. A section-level parent would give the LLM the log it already has and not the fix.
-- **Citation** = the section of the best-matching child (`RB-AUTH-DB-POOL § Example Log Output`), so the answer can point to exactly where it matched.
+- **Citation** = the section of the best-matching child (`[RB-AUTH-DB-POOL] Example Log Output`), so the answer can point to exactly where it matched. (Originally written with `§`; changed to ASCII in Phase 4 after the model returned it corrupted as `\x00a7`, see 04-agent.md.)
 - **Code fences are atomic.** Never split a stack trace or a YAML block in half; a `## ` line inside a code fence is not a header (unit-tested).
 
 ### Contextual chunk headers

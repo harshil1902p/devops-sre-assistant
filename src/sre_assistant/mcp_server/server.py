@@ -56,7 +56,8 @@ Recommended workflow when a service misbehaves:
 3. get_recent_events(service) - if the container restarted, evidence of the previous run lives here.
 4. search_runbooks(<exact error signature>) - past incidents and runbooks; cite results by their `citation`.
 5. read_env_config(service, file) - verify configuration values the runbook mentions (secrets are redacted).
-Never guess values that a tool can verify. These tools cannot change anything."""
+Never guess values that a tool can verify. The diagnostic tools above are read-only. If remediation is enabled on
+this deployment, restart_service also exists; it only works with a human-approval token that you never receive."""
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
 DESTRUCTIVE = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False)

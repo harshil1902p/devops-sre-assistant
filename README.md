@@ -5,9 +5,9 @@
 An AI production companion that diagnoses crashes, server errors and infrastructure bugs by combining:
 
 - **Live telemetry** via a custom **MCP server** (Docker / Kubernetes / Azure Monitor logs, health, config)
-- **Institutional memory** via **hybrid RAG** (pgvector + BM25 → Azure AI Search) over runbooks and post-mortems
+- **Institutional memory** via **hybrid RAG** over runbooks and post-mortems: locally pgvector (HNSW) + Postgres full-text (`ts_rank_cd` with rare-term pruning, a BM25 approximation); in the cloud Azure AI Search (HNSW + true BM25, server-side RRF)
 - A **ReAct agent** (LangGraph) that chains the two and returns a cited, step-by-step fix
-- **Guardrails** (secret/PII redaction, read-only tools, human approval) and an **evaluation harness** (golden set + LLM-as-a-Judge) in CI
+- **Guardrails** (secret/PII redaction, read-only diagnostic tools, optional restart only with signed human approval) and an **evaluation harness** (golden set + LLM-as-a-Judge) in CI
 
 ```
  User ──▶ LangGraph ReAct agent ──▶ MCP server ──▶ Docker / K8s / Azure Monitor (live logs, health)
@@ -97,6 +97,7 @@ uv run python scripts/ship_telemetry.py --interval 30
 SRE_TELEMETRY_BACKEND=azure_monitor SRE_RETRIEVER_BACKEND=azure_search uv run python -m sre_assistant.agent "auth-service is returning 500s"
 ```
 
+**Start here:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): flow, models, embeddings, data, technology choices and known limitations.
 Learning notes and interview prep for each phase live in [docs/learning](docs/learning).
 
 ## Production API (Phase 8)

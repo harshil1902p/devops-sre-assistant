@@ -41,7 +41,7 @@ Pricing came from the **Azure Retail Prices API** (the pricing web page renders 
 **$0.10/1M cached input**, $1.60/1M output.
 
 **Chat and embeddings are separate providers.** The pgvector index was built with `nomic-embed-text`, so embeddings stay local:
-mixing embedding models breaks the vector space (Phase 0 quiz). Moving chat to Azure is just `SRE_CHAT_PROVIDER=azure_openai`.
+mixing embedding models breaks the vector space (Phase 0 quiz). Moving chat to Azure needs `SRE_CHAT_PROVIDER=azure_openai` **plus** `SRE_CHAT_MODEL=<deployment name>` (e.g. `gpt-4.1-mini`) and `SRE_AZURE_OPENAI_ENDPOINT`: for Azure, `chat_model` is the *deployment* name, and its default is still the local `qwen2.5:7b`.
 
 ---
 
