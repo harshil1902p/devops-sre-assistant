@@ -10,6 +10,7 @@ param embeddingModel object
 param deployPlatform bool
 param deployApps bool
 param imageTag string
+param githubRepo string
 
 // Built-in role definition ids (stable GUIDs)
 var roles = {
@@ -92,6 +93,7 @@ module platform 'platform.bicep' = if (deployPlatform) {
     embeddingDeployment: embeddingModel.name
     deployApps: deployApps
     imageTag: imageTag
+    githubRepo: githubRepo
   }
 }
 
@@ -101,3 +103,5 @@ output logAnalyticsWorkspaceId string = deployPlatform ? platform!.outputs.logAn
 output registryLoginServer string = deployPlatform ? platform!.outputs.registryLoginServer : ''
 output agentApiUrl string = deployPlatform ? platform!.outputs.agentApiUrl : ''
 output logsIngestion object = deployPlatform ? platform!.outputs.logsIngestion : {}
+output keyVaultUri string = deployPlatform ? platform!.outputs.keyVaultUri : ''
+output agentIdentityClientId string = deployPlatform ? platform!.outputs.agentIdentityClientId : ''

@@ -28,8 +28,8 @@ An AI production companion that diagnoses crashes, server errors and infrastruct
 | 4 | LangGraph agent (workflow + ReAct), Azure OpenAI keyless, memory, guards, grounding, spend cap | ✅ |
 | 5 | Guardrails: secrets + PII pseudonymisation (regex, Luhn, spaCy NER), injection defence in depth, HITL remediation with signed approvals | ✅ |
 | 6 | Evaluation: replayed telemetry, 21-case golden set (incl. adversarial), deterministic metrics, DeepEval G-Eval judge, CI quality gate | ✅ |
-| 7 | Azure: Azure OpenAI, AI Search, Monitor/KQL, Key Vault, Managed Identity, Container Apps, Bicep | ⏳ |
-| 8 | Production hardening: API + auth, OpenTelemetry, cost tracking, AKS | ⏳ |
+| 7 | Azure: AI Search hybrid + semantic ranker, Azure Monitor (log shipper, DCR, KQL backend), Key Vault, managed identity, GitHub OIDC cloud evals, Bicep | ✅ |
+| 8 | Production: agent API + auth, Container Apps, OpenTelemetry, cost tracking, Kubernetes | ⏳ |
 
 ## Retrieval benchmark (34 hand-written queries, 51 docs, nomic-embed-text, CPU)
 
@@ -41,6 +41,9 @@ An AI production companion that diagnoses crashes, server errors and infrastruct
 | **parent-child, hybrid + cross-encoder rerank, top 2** | **1.00** | **1.00** | **1003** | 995 ms |
 
 Saturated scores mean this query set is too easy; Phase 6 builds a harder golden set. Raw results: `eval/results/retrieval.json`.
+
+On **Azure AI Search** (text-embedding-3-small, same queries): vector 0.94, BM25 0.97, **hybrid (server-side RRF) 1.00** hit@1 at 338 ms;
+semantic ranker +60 ms, local cross-encoder +450 ms. Raw results: `eval/results/retrieval_azure.json`.
 
 ## Agent evaluation (21 golden cases, replayed telemetry, gpt-4.1-mini)
 
@@ -85,6 +88,13 @@ uv run pytest -m integration                    # live checks against the demo s
 uv run python scripts/run_evals.py --no-judge --limit 3   # quick smoke
 uv run python scripts/run_evals.py                        # full golden set + LLM judge
 uv run python scripts/eval_gate.py                        # free: thresholds check
+
+# Azure (Phase 7): deploy, index, ship logs, run the agent against Azure backends (see docs/learning/07-azure.md)
+az deployment sub create -l canadaeast -f infra/azure/main.bicep -p infra/azure/main.bicepparam \
+  -p principalId=$(az ad signed-in-user show --query id -o tsv) alertEmail=<you@example.com>
+uv run python scripts/ingest_azure.py
+uv run python scripts/ship_telemetry.py --interval 30
+SRE_TELEMETRY_BACKEND=azure_monitor SRE_RETRIEVER_BACKEND=azure_search uv run python -m sre_assistant.agent "auth-service is returning 500s"
 ```
 
 Learning notes and interview prep for each phase live in [docs/learning](docs/learning).

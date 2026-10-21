@@ -67,6 +67,22 @@ class Settings(BaseSettings):
     remediation_allowed_envs: list[str] = ["staging"]
     approval_secret: SecretStr | None = Field(None, description="signs human-approval tokens; never sent to the LLM")
 
+    # --- Azure platform (Phase 7) ---
+    retriever_backend: Literal["pgvector", "azure_search"] = "pgvector"
+    azure_search_endpoint: str | None = None
+    azure_search_index: str = "sre-runbooks"
+    # The Azure index has its own embedding model, independent of the local pgvector one (768-d nomic).
+    azure_search_embedding_model: str = "text-embedding-3-small"
+    azure_search_embedding_dim: int = 1536
+    azure_search_rerank: Literal["cross_encoder", "semantic", "none"] = Field(
+        "cross_encoder", description="semantic = Azure semantic ranker (free plan: 1,000 queries/month)"
+    )
+    telemetry_backend: Literal["docker", "azure_monitor"] = "docker"
+    log_analytics_workspace_id: str | None = None
+    logs_ingestion_endpoint: str | None = None
+    logs_ingestion_rule_id: str | None = None
+    key_vault_url: str | None = Field(None, description="if set, missing secrets are loaded from Key Vault")
+
     @property
     def effective_chat_provider(self) -> str:
         return self.chat_provider or self.llm_provider
@@ -80,9 +96,43 @@ class Settings(BaseSettings):
         uses_azure = "azure_openai" in (self.effective_chat_provider, self.effective_embedding_provider)
         if uses_azure and not self.azure_openai_endpoint:
             raise ValueError("SRE_AZURE_OPENAI_ENDPOINT is required when a provider is azure_openai")
+        if self.retriever_backend == "azure_search" and not self.azure_search_endpoint:
+            raise ValueError("SRE_AZURE_SEARCH_ENDPOINT is required when SRE_RETRIEVER_BACKEND=azure_search")
+        if self.telemetry_backend == "azure_monitor" and not self.log_analytics_workspace_id:
+            raise ValueError("SRE_LOG_ANALYTICS_WORKSPACE_ID is required when SRE_TELEMETRY_BACKEND=azure_monitor")
         return self
+
+
+# Settings field -> Key Vault secret name (Key Vault names allow only letters, digits and dashes).
+KEY_VAULT_SECRETS = {"pii_key": "sre-pii-key", "approval_secret": "sre-approval-secret"}
+
+
+def load_key_vault_secrets(settings: Settings, client=None) -> Settings:
+    """Fill secrets that aren't set locally from Key Vault (keyless: DefaultAzureCredential / managed identity).
+
+    Precedence: explicit env/.env value > Key Vault > default. Values stay SecretStr, never logged.
+    """
+    missing = [f for f in KEY_VAULT_SECRETS if getattr(settings, f) is None]
+    if not settings.key_vault_url or not missing:
+        return settings
+    if client is None:
+        from azure.identity import DefaultAzureCredential
+        from azure.keyvault.secrets import SecretClient
+
+        client = SecretClient(
+            settings.key_vault_url, DefaultAzureCredential(exclude_interactive_browser_credential=True)
+        )
+    from azure.core.exceptions import ResourceNotFoundError
+
+    update = {}
+    for field in missing:
+        try:
+            update[field] = SecretStr(client.get_secret(KEY_VAULT_SECRETS[field]).value)
+        except ResourceNotFoundError:
+            continue
+    return settings.model_copy(update=update)
 
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    return load_key_vault_secrets(Settings())

@@ -2,6 +2,7 @@
 
 uv run python -m sre_assistant.mcp_server                       # stdio (VS Code / Claude Desktop / agents)
 uv run python -m sre_assistant.mcp_server --transport streamable-http --port 8765   # remote clients
+SRE_TELEMETRY_BACKEND=azure_monitor uv run python -m sre_assistant.mcp_server     # query Azure Monitor (KQL)
 """
 
 import argparse
@@ -34,7 +35,12 @@ def main() -> None:
 
         return build_retriever(s)
 
-    backend = DockerBackend(s.docker_host, event_store_dsn=s.database_url.get_secret_value())
+    if s.telemetry_backend == "azure_monitor":
+        from sre_assistant.mcp_server.backends.azure_monitor import AzureMonitorBackend
+
+        backend = AzureMonitorBackend(s.log_analytics_workspace_id)
+    else:
+        backend = DockerBackend(s.docker_host, event_store_dsn=s.database_url.get_secret_value())
     server = build_server(backend, retriever_factory, CORPUS, s)
     if a.transport == "stdio":
         server.run("stdio")

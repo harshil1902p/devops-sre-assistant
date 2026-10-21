@@ -7,7 +7,7 @@
 | Building MCP servers and tools | Phase 3: custom MCP server (`inspect_live_logs`, `check_system_health`, `read_env_config`, `search_runbooks`) |
 | Agentic patterns: tool use, ReAct, orchestration, memory | Phase 4: LangGraph ReAct agent with MCP tools and conversation memory |
 | LLM API integration & prompt engineering | Phases 0, 4, 7: provider abstraction, system prompts, structured outputs, Azure OpenAI |
-| RAG systems: vector DBs, embeddings, retrieval strategies | Phase 2: pgvector, parent-child chunking, hybrid BM25 + vector with RRF. Phase 7: Azure AI Search |
+| RAG systems: vector DBs, embeddings, retrieval strategies | Phase 2: pgvector, parent-child chunking, hybrid BM25 + vector with RRF. Phase 7: Azure AI Search hybrid + semantic ranker (1.00 hit@1) |
 | .NET/C#, Python, SQL, Git, CI/CD | Python + SQL (pgvector/tsvector) throughout; GitHub Actions in Phase 6; C# from your RBC work |
 | Cloud + containers | Docker/Compose (Phase 1+), Azure Container Apps and AKS (Phases 7–8) |
 | Security, data governance, responsible AI | Phase 5: redaction, read-only tools, human approval, audit log. Phase 7: Managed Identity, Key Vault |

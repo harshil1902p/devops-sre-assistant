@@ -6,5 +6,6 @@ param prefix = 'sre'
 param budgetAmount = 1
 param principalId = ''
 param alertEmail = ''
-param deployPlatform = false
+param deployPlatform = true // Phase 7
+param githubRepo = 'harshil1902p/devops-sre-assistant'
 param deployApps = false

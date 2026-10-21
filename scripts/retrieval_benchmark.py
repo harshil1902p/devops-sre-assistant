@@ -10,6 +10,7 @@ Metrics (per configuration, averaged over queries):
   ctx_tokens     tokens of context sent to the LLM (cost and latency driver)
 """
 
+import argparse
 import json
 import statistics
 import time
@@ -37,6 +38,17 @@ CONFIGS = [
 ]
 BEST = "parent | hybrid+rerank  | top3"
 
+# Azure AI Search (Phase 7). rerank column: none | cross_encoder (local ONNX) | semantic (Azure semantic ranker)
+AZURE_CONFIGS = [
+    ("azure  | vector         | top3", "vector", "none", 3),
+    ("azure  | keyword (BM25) | top3", "keyword", "none", 3),
+    ("azure  | hybrid (RRF)   | top3", "hybrid", "none", 3),
+    ("azure  | hybrid+semantic| top3", "hybrid", "semantic", 3),
+    ("azure  | hybrid+xencoder| top3", "hybrid", "cross_encoder", 3),
+    ("azure  | hybrid+xencoder| top2", "hybrid", "cross_encoder", 2),
+]
+AZURE_BEST = "azure  | hybrid+xencoder| top3"
+
 
 def fix_markers(scenario) -> list[str]:
     """Distinctive fix sentences; at least one must appear in the context for fix_in_ctx."""
@@ -47,8 +59,8 @@ def fix_markers(scenario) -> list[str]:
     ]
 
 
-def evaluate(label, collection, mode, rerank, top, scenarios) -> dict:
-    retriever = build_retriever(collection=collection)
+def evaluate(label, collection, mode, rerank, top, scenarios, settings=None) -> dict:
+    retriever = build_retriever(settings, collection=collection)
     rows = []
     for q in QUERIES:
         t = time.perf_counter()
@@ -72,7 +84,8 @@ def evaluate(label, collection, mode, rerank, top, scenarios) -> dict:
                 "latency_ms": latency,
             }
         )
-    retriever.store.close()
+    if hasattr(retriever, "store"):
+        retriever.store.close()
 
     def agg(rs, key):
         return statistics.mean(r[key] for r in rs)
@@ -87,13 +100,24 @@ def evaluate(label, collection, mode, rerank, top, scenarios) -> dict:
 
 
 def main() -> None:
+    p = argparse.ArgumentParser()
+    p.add_argument("--backend", choices=["pgvector", "azure"], default="pgvector")
+    backend = p.parse_args().backend
     s = get_settings()
     scenarios = {sc.id: sc for sc in load_scenarios(ROOT / "data" / "scenarios")}
-    results = [evaluate(*c, scenarios) for c in CONFIGS]
+    if backend == "azure":
+        results = []
+        for label, mode, strategy, top in AZURE_CONFIGS:
+            sa = s.model_copy(update={"retriever_backend": "azure_search", "azure_search_rerank": strategy})
+            results.append(evaluate(label, "parent_child", mode, strategy != "none", top, scenarios, sa))
+        best_label, out, model = AZURE_BEST, OUT.with_name("retrieval_azure.json"), s.azure_search_embedding_model
+    else:
+        results = [evaluate(*c, scenarios) for c in CONFIGS]
+        best_label, out, model = BEST, OUT, s.embedding_model
 
     print(
         f"\n{len(QUERIES)} queries ({sum(q['kind'] == 'log' for q in QUERIES)} log, "
-        f"{sum(q['kind'] == 'symptom' for q in QUERIES)} symptom), embeddings={s.embedding_model}\n"
+        f"{sum(q['kind'] == 'symptom' for q in QUERIES)} symptom), embeddings={model}\n"
     )
     cols = [("hit@1", 7), ("hit@3", 7), ("MRR", 7), ("fix_in_ctx", 12), ("ctx_tok", 9), ("h@1 log", 9),
             ("h@1 sym", 9), ("p50 ms", 8)]  # fmt: skip
@@ -106,14 +130,14 @@ def main() -> None:
             f"{a['ctx_tokens']:>9.0f}{r['log']['hit@1']:>9.2f}{r['symptom']['hit@1']:>9.2f}{r['p50_latency_ms']:>8.0f}"
         )
 
-    best = next(r for r in results if r["config"] == BEST)
+    best = next(r for r in results if r["config"] == best_label)
     print(f"\nMisses for '{best['config']}':")
     for m in best["misses"] or ["(none)"]:
         print("  ", m)
 
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text(json.dumps({"embedding_model": s.embedding_model, "results": results}, indent=2))
-    print(f"\nwrote {OUT.relative_to(ROOT)}")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps({"embedding_model": model, "results": results}, indent=2))
+    print(f"\nwrote {out.relative_to(ROOT)}")
 
 
 if __name__ == "__main__":

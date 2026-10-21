@@ -1,0 +1,187 @@
+{
+  "embedding_model": "text-embedding-3-small",
+  "results": [
+    {
+      "config": "azure  | vector         | top3",
+      "all": {
+        "hit@1": 0.941,
+        "hit@3": 0.971,
+        "rr": 0.958,
+        "fix_in_ctx": 0.971,
+        "ctx_tokens": 1343.382
+      },
+      "log": {
+        "hit@1": 0.941,
+        "hit@3": 0.941,
+        "rr": 0.956,
+        "fix_in_ctx": 0.941,
+        "ctx_tokens": 1325.471
+      },
+      "symptom": {
+        "hit@1": 0.941,
+        "hit@3": 1,
+        "rr": 0.961,
+        "fix_in_ctx": 1,
+        "ctx_tokens": 1361.294
+      },
+      "p50_latency_ms": 290.6,
+      "misses": [
+        [
+          "db-pool-exhaustion",
+          [
+            "pg-too-many-connections",
+            "pg-too-many-connections"
+          ],
+          "login requests fail after exactly 5 seconds with 500 but postgres cpu "
+        ],
+        [
+          "crashloop-missing-env",
+          [
+            "redis-connection-refused",
+            "redis-connection-refused"
+          ],
+          "KeyError: 'REDIS_URL' Back-off restarting failed container worker in p"
+        ]
+      ]
+    },
+    {
+      "config": "azure  | keyword (BM25) | top3",
+      "all": {
+        "hit@1": 0.971,
+        "hit@3": 1,
+        "rr": 0.985,
+        "fix_in_ctx": 1,
+        "ctx_tokens": 1291.118
+      },
+      "log": {
+        "hit@1": 1,
+        "hit@3": 1,
+        "rr": 1.0,
+        "fix_in_ctx": 1,
+        "ctx_tokens": 1285.824
+      },
+      "symptom": {
+        "hit@1": 0.941,
+        "hit@3": 1,
+        "rr": 0.971,
+        "fix_in_ctx": 1,
+        "ctx_tokens": 1296.412
+      },
+      "p50_latency_ms": 39.3,
+      "misses": [
+        [
+          "azure-openai-429",
+          [
+            "liveness-probe-dependency",
+            "azure-openai-429"
+          ],
+          "our llm calls get throttled whenever the nightly evaluation job runs a"
+        ]
+      ]
+    },
+    {
+      "config": "azure  | hybrid (RRF)   | top3",
+      "all": {
+        "hit@1": 1,
+        "hit@3": 1,
+        "rr": 1.0,
+        "fix_in_ctx": 1,
+        "ctx_tokens": 1318.706
+      },
+      "log": {
+        "hit@1": 1,
+        "hit@3": 1,
+        "rr": 1.0,
+        "fix_in_ctx": 1,
+        "ctx_tokens": 1316.647
+      },
+      "symptom": {
+        "hit@1": 1,
+        "hit@3": 1,
+        "rr": 1.0,
+        "fix_in_ctx": 1,
+        "ctx_tokens": 1320.765
+      },
+      "p50_latency_ms": 337.7,
+      "misses": []
+    },
+    {
+      "config": "azure  | hybrid+semantic| top3",
+      "all": {
+        "hit@1": 1,
+        "hit@3": 1,
+        "rr": 1.0,
+        "fix_in_ctx": 1,
+        "ctx_tokens": 1316.765
+      },
+      "log": {
+        "hit@1": 1,
+        "hit@3": 1,
+        "rr": 1.0,
+        "fix_in_ctx": 1,
+        "ctx_tokens": 1285.824
+      },
+      "symptom": {
+        "hit@1": 1,
+        "hit@3": 1,
+        "rr": 1.0,
+        "fix_in_ctx": 1,
+        "ctx_tokens": 1347.706
+      },
+      "p50_latency_ms": 397.7,
+      "misses": []
+    },
+    {
+      "config": "azure  | hybrid+xencoder| top3",
+      "all": {
+        "hit@1": 1,
+        "hit@3": 1,
+        "rr": 1.0,
+        "fix_in_ctx": 1,
+        "ctx_tokens": 1324.265
+      },
+      "log": {
+        "hit@1": 1,
+        "hit@3": 1,
+        "rr": 1.0,
+        "fix_in_ctx": 1,
+        "ctx_tokens": 1308.353
+      },
+      "symptom": {
+        "hit@1": 1,
+        "hit@3": 1,
+        "rr": 1.0,
+        "fix_in_ctx": 1,
+        "ctx_tokens": 1340.176
+      },
+      "p50_latency_ms": 789.9,
+      "misses": []
+    },
+    {
+      "config": "azure  | hybrid+xencoder| top2",
+      "all": {
+        "hit@1": 1,
+        "hit@3": 1,
+        "rr": 1.0,
+        "fix_in_ctx": 1,
+        "ctx_tokens": 999.088
+      },
+      "log": {
+        "hit@1": 1,
+        "hit@3": 1,
+        "rr": 1.0,
+        "fix_in_ctx": 1,
+        "ctx_tokens": 1039.941
+      },
+      "symptom": {
+        "hit@1": 1,
+        "hit@3": 1,
+        "rr": 1.0,
+        "fix_in_ctx": 1,
+        "ctx_tokens": 958.235
+      },
+      "p50_latency_ms": 762.3,
+      "misses": []
+    }
+  ]
+}

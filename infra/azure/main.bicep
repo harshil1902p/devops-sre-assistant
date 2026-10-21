@@ -48,6 +48,9 @@ param deployApps bool = false
 
 param imageTag string = 'latest'
 
+@description('GitHub repo (owner/name) allowed to federate into the agent identity (OIDC)')
+param githubRepo string = ''
+
 var suffix = take(uniqueString(subscription().id, prefix, location), 6)
 var tags = {
   project: 'devops-sre-assistant'
@@ -110,6 +113,7 @@ module workload 'modules/workload.bicep' = {
     deployPlatform: deployPlatform
     deployApps: deployApps
     imageTag: imageTag
+    githubRepo: githubRepo
   }
 }
 
@@ -122,3 +126,5 @@ output logAnalyticsWorkspaceId string = workload.outputs.logAnalyticsWorkspaceId
 output registryLoginServer string = workload.outputs.registryLoginServer
 output agentApiUrl string = workload.outputs.agentApiUrl
 output logsIngestion object = workload.outputs.logsIngestion
+output keyVaultUri string = workload.outputs.keyVaultUri
+output agentIdentityClientId string = workload.outputs.agentIdentityClientId

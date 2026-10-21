@@ -16,3 +16,6 @@ demo/auth-service/config/app.yaml
 *.pem
 *.key
 .azure/
+.env.*
+!.env.example
+*.bak*

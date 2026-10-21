@@ -1,0 +1,61 @@
+name: cloud-eval
+
+# Manually triggered: runs the golden-set evals against the real Azure stack (Azure OpenAI + Azure AI Search).
+# Auth: GitHub OIDC -> federated credential on the read-only agent managed identity. No Azure secrets anywhere:
+# the job gets a short-lived token only when it runs in the protected `cloud-eval` environment of this repo.
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Number of golden cases (~$0.008 each; 21 = full set)"
+        default: "5"
+      judge:
+        description: "Also run the LLM judge (~$0.0015 per case)"
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write   # required to request the OIDC token
+  contents: read
+
+concurrency:
+  group: cloud-eval
+  cancel-in-progress: false
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    environment: cloud-eval   # protected: required reviewer; also the only subject the federated credential trusts
+    timeout-minutes: 30
+    env:
+      SRE_CHAT_PROVIDER: azure_openai
+      SRE_CHAT_MODEL: gpt-4.1-mini
+      SRE_AZURE_OPENAI_ENDPOINT: ${{ vars.AZURE_OPENAI_ENDPOINT }}
+      SRE_RETRIEVER_BACKEND: azure_search
+      SRE_AZURE_SEARCH_ENDPOINT: ${{ vars.AZURE_SEARCH_ENDPOINT }}
+      SRE_KEY_VAULT_URL: ${{ vars.KEY_VAULT_URL }}
+      SRE_SPEND_LIMIT_USD: "0.25"   # per-run cap (the runner starts with an empty spend ledger)
+      DEEPEVAL_TELEMETRY_OPT_OUT: "YES"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Run evals
+        run: uv run python scripts/run_evals.py --limit "${{ inputs.limit }}" ${{ inputs.judge && ' ' || '--no-judge' }}
+      - name: Quality gate (full set only)
+        if: inputs.limit == '21' && inputs.judge
+        run: uv run python scripts/eval_gate.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-results
+          path: |
+            eval/results/agent_eval.json
+            .audit/spend.jsonl

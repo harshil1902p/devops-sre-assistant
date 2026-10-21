@@ -11,6 +11,7 @@ import argparse
 import asyncio
 import getpass
 import json
+import os
 import sys
 import time
 import uuid
@@ -21,7 +22,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.types import Command
 from mcp.client import Client
-from mcp.client.stdio import StdioServerParameters
+from mcp.client.stdio import StdioServerParameters, get_default_environment
 
 from sre_assistant.agent.graph import build_graph, usage_summary
 from sre_assistant.agent.mcp_tools import load_mcp_tools
@@ -79,7 +80,12 @@ def _ask_human(payload: dict, auto: str | None) -> dict:
 async def run(question: str, thread: str, service: str | None, since: int, use_memory: bool, as_json: bool,
               auto: str | None = None) -> dict:  # fmt: skip
     s = get_settings()
-    params = StdioServerParameters(command=sys.executable, args=["-m", "sre_assistant.mcp_server"], cwd=str(ROOT))
+    # The MCP SDK passes only a minimal, safe env to stdio servers; forward our own SRE_* settings explicitly
+    # (e.g. SRE_TELEMETRY_BACKEND=azure_monitor), nothing else from the parent environment.
+    env = get_default_environment() | {k: v for k, v in os.environ.items() if k.startswith("SRE_")}
+    params = StdioServerParameters(
+        command=sys.executable, args=["-m", "sre_assistant.mcp_server"], cwd=str(ROOT), env=env
+    )
     async with AsyncExitStack() as stack:
         client = await stack.enter_async_context(Client(params, read_timeout_seconds=180))
         tools = await load_mcp_tools(client)
